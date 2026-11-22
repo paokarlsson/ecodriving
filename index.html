@@ -177,6 +177,20 @@
       </div>
     </div>
     <div class="drive-target" id="d-target"></div>
+    <div class="gmeter" id="d-gmeter" hidden>
+      <div class="gm-row"><span>Sidokraft nu</span><span id="d-gplan">planerat 0,25 g</span></div>
+      <div class="gm-big" id="d-gnow">0,00 g</div>
+      <div class="gm-bar"><i id="d-gbar"></i><b id="d-gmark"></b></div>
+    </div>
+    <div class="ask-card" id="d-ask" hidden role="dialog" aria-labelledby="d-ask-q">
+      <div class="ask-q" id="d-ask-q">Kurvan tog 0,31 g. Var det okej?</div>
+      <div class="ask-m" id="d-ask-m"></div>
+      <div class="ask-btns">
+        <button class="btn primary" id="d-ask-ok">Okej</button>
+        <button class="btn danger-fill" id="d-ask-no">För mycket</button>
+      </div>
+      <div class="ask-timer"><i id="d-ask-timer"></i></div>
+    </div>
     <canvas id="d-map" class="map drive-map" aria-hidden="true"></canvas>
     <div class="actions drive-actions">
       <button class="btn ghost" id="d-stop">Avsluta</button>
@@ -188,6 +202,8 @@
     <header class="bar"><h1>Framme</h1></header>
     <div class="content">
       <div class="stats" id="sum-stats"></div>
+      <h2 class="section-title" id="sum-curves-title" hidden>Kurvor på resan</h2>
+      <ul class="list curves" id="sum-curves"></ul>
       <p class="hint">”Följd” betyder att farten började sjunka inom reaktionsmarginalen plus några sekunder efter signalen (mätt med GPS-farten).</p>
     </div>
     <div class="actions">
@@ -237,6 +253,19 @@
           <input type="range" id="set-rb" min="15" max="40" step="5">
         </label>
         <button class="btn small ghost" id="set-test-sound">Testa ljud</button>
+      </div>
+
+      <h2 class="section-title">Kurvkraft</h2>
+      <div class="card">
+        <p id="set-learn-show">Sidokraft 0,25 g.</p>
+        <label class="field check">
+          <input type="checkbox" id="set-learn"> <span>Lär av mina svar</span>
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="set-ask"> <span>Fråga direkt efter kurvan</span>
+        </label>
+        <small class="hint">Gyrot mäter sidokraften i varje kurva. Var den mer än 15 % över planerat frågar appen om det var okej. Av = frågorna ställs i sammanfattningen.</small>
+        <div class="row" style="margin-top:10px"><button class="btn small ghost danger" id="set-learn-reset">Återställ inlärd sidokraft</button></div>
       </div>
 
       <h2 class="section-title">Släpvagn</h2>

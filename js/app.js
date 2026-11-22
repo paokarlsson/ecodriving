@@ -8,6 +8,7 @@ import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './
 import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
 import { estimateTrailerModel, trailerLimits } from './trailer.js';
+import { LateralMeter, CurveTracker, learnALat, isStraightAt, routeYaw } from './lateral.js';
 import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
 import { unlockAudio, sounds, speak } from './audio.js';
@@ -219,7 +220,7 @@ $('calib-start').addEventListener('click', async () => {
       calibState('Rulla – rör inte gas eller broms.', 'cue');
     }
   }, err => calibState(err.message, 'bad')));
-  calib.stops.push(watchMotion(m => rec.addMotion(m)));
+  calib.stops.push(watchMotion(m => { if (m.ax != null) rec.addMotion(m); }));
 });
 
 async function onCalibEvent(rec, ev) {
@@ -546,6 +547,12 @@ function startDrive() {
   drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: s.marginS });
   drive.coastStart = null;
   drive.rerouting = false;
+  drive.meter = new LateralMeter();
+  drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
+  drive.curveLog = [];
+  drive.askQueue = [];
+  hideAsk();
+  $('d-gmeter').hidden = true;
   show('drive');
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
   drive.stops.push(keepAwake());
@@ -553,12 +560,17 @@ function startDrive() {
     drive.sim = new SimCar(plan.route, plan.limits, model());
     drive.simTimer = setInterval(() => {
       const obs = drive.sim.step(1, plan.targets);
+      // Simulerat gyro: bilens vridhastighet ur ruttens form
+      drive.meter.setSpeed(obs.speed);
+      drive.meter.addYaw(obs.t, routeYaw(plan.route, drive.sim.s, obs.speed), 1);
+      sampleCurve(obs.t);
       onDriveObs(obs);
     }, 250);
     drive.stops.push(() => clearInterval(drive.simTimer));
   } else {
     drive.stops.push(watchGps(onDriveObs, e => toast(e.message, true)));
     drive.stops.push(watchCompass(h => { drive.compass = h; }));
+    drive.stops.push(watchMotion(onDriveMotion));
   }
   $('d-limit').classList.toggle('trailer', trailerOn());
   if (store.settings.voice && !drive.muted) speak(`${trailerOn() ? 'Släpvagnsläge. ' : ''}Kör försiktigt. Bromsen används alltid vid behov.`);
@@ -568,12 +580,134 @@ function stopDrive() {
   drive.stops.forEach(f => f());
   drive.stops = [];
   drive.sim = null;
+  hideAsk();
+}
+
+// ---------- Kurvkraft ----------
+function onDriveMotion(m) {
+  if (!drive.meter) return;
+  drive.meter.addMotion(m);
+  sampleCurve(m.t);
+}
+
+let gmeterAt = 0;
+function sampleCurve(t) {
+  if (!drive.tracker || !drive.tracker.inside()) return;
+  const c = drive.meter.current();
+  drive.tracker.sample(t, c.a, drive.meter.v, c.yaw);
+  const now = performance.now();
+  if (now - gmeterAt > 150) { gmeterAt = now; renderGMeter(); }
+}
+
+function renderGMeter() {
+  const el = $('d-gmeter');
+  const tr = drive.tracker;
+  if (!tr || !tr.inside()) { el.hidden = true; return; }
+  const curve = tr.active.curve;
+  const planned = (curve.v * curve.v) / curve.radius / 9.81;
+  const g = drive.meter.current().g;
+  el.hidden = false;
+  $('d-gnow').textContent = fmtG(g);
+  $('d-gplan').textContent = `planerat ${fmtG(planned)}`;
+  const scale = Math.max(0.5, planned * 1.6);
+  $('d-gbar').style.width = `${Math.min(100, (g / scale) * 100)}%`;
+  $('d-gmark').style.left = `${(planned / scale) * 100}%`;
+  el.classList.toggle('over', g > planned * 1.15);
+}
+
+const fmtG = g => `${g.toFixed(2).replace('.', ',')} g`;
+
+function trackCurves(view, obs) {
+  if (!drive.tracker || view.mode === 'paused') return;
+  const s = view.s || 0, v = view.v || 0;
+  drive.meter.setSpeed(v);
+  drive.meter.setStraight(v < 0.5 || isStraightAt(plan.route, s));
+  for (const ev of drive.tracker.update(s, obs.t, v, drive.meter)) {
+    if (ev.type === 'exit') {
+      const rec = { ...ev.record, answer: null, trailer: trailerOn() };
+      drive.curveLog.push(rec);
+      if (rec.ask && store.settings.askCurvesInDrive) drive.askQueue.push(rec);
+    }
+  }
+  renderGMeter();
+  maybeAsk(view);
+}
+
+let askTimer = null;
+/** Frågan visas bara på rak väg, inte nära en kurva eller en släpp-signal. */
+function maybeAsk(view) {
+  if (!$('d-ask').hidden || !drive.askQueue.length) return;
+  const s = view.s || 0;
+  if (drive.tracker.inside()) return;
+  if ((plan.curves || []).some(c => c.s > s && c.s - s < 150)) return;
+  if (view.distToRelease != null && view.distToRelease < 300) return;
+  if (Date.now() < drive.flashUntil) return;
+  showAsk(drive.askQueue.shift());
+}
+
+function showAsk(rec) {
+  drive.asking = rec;
+  $('d-ask-q').textContent = `Kurvan tog ${fmtG(rec.peakG)}. Var det okej?`;
+  $('d-ask-m').textContent = `planerat ${fmtG(rec.plannedG)} · ${kmh(rec.maxV)} km/h i ${kmh(rec.plannedV)}-kurva`;
+  $('d-ask').hidden = false;
+  const bar = $('d-ask-timer');
+  bar.style.transition = 'none';
+  bar.style.width = '100%';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    bar.style.transition = 'width 10s linear';
+    bar.style.width = '0%';
+  }));
+  clearTimeout(askTimer);
+  askTimer = setTimeout(hideAsk, 10000);
+}
+
+function hideAsk() {
+  clearTimeout(askTimer);
+  $('d-ask').hidden = true;
+  drive.asking = null;
+}
+
+$('d-ask-ok').addEventListener('click', () => { if (drive.asking) answerCurve(drive.asking, 'ok'); hideAsk(); });
+$('d-ask-no').addEventListener('click', () => { if (drive.asking) answerCurve(drive.asking, 'too_much'); hideAsk(); });
+
+/** Sparar svaret och justerar sidokraften (om inlärning är på). */
+function answerCurve(rec, answer) {
+  rec.answer = answer;
+  const st = store.settings;
+  store.curveAnswers = [...store.curveAnswers, {
+    date: new Date().toISOString(), answer, peakG: rec.peakG, plannedG: rec.plannedG,
+    speed: rec.speedAtPeak, radius: rec.radius, trailer: rec.trailer,
+  }];
+  if (!st.learnCurves) return;
+  const key = rec.trailer ? 'trailerALat' : 'aLat';
+  const bounds = rec.trailer ? { min: 0.10 * 9.81, max: 0.30 * 9.81 } : { min: 0.15 * 9.81, max: 0.35 * 9.81 };
+  const before = st[key];
+  const after = Math.round(learnALat(before, rec, answer, bounds) * 1000) / 1000;
+  const counts = store.curveLearn;
+  counts[rec.trailer ? 'trailer' : 'car'] = (counts[rec.trailer ? 'trailer' : 'car'] || 0) + 1;
+  store.curveLearn = counts;
+  if (Math.abs(after - before) < 0.001) return;
+  store.settings = { ...store.settings, [key]: after };
+  toast(`Sidokraft i kurvor: ${fmtG(after / 9.81)} (var ${fmtG(before / 9.81)}).`);
+  // Gäller resten av resan om den pågår och avser samma läge
+  if (plan && drive.engine && rec.trailer === trailerOn()) applyNewCurveSpeeds();
+}
+
+function applyNewCurveSpeeds() {
+  const eng = drive.engine;
+  plan = computeTargets(plan);
+  const passed = (eng.coast ? eng.coast.target.s : eng.s) + 1;
+  eng.targets = plan.targets;
+  eng.fired = new Set(plan.targets.filter(t => t.s <= passed).map(t => t.id));
+  drive.tracker.setCurves(plan.curves, planSettings().aLat);
 }
 
 function onDriveObs(obs) {
   if (!drive.engine || drive.rerouting) return;
   drive.lastObs = obs;
   const { view, events } = drive.engine.update(obs);
+  const arrived = events.some(e => e.type === 'arrived');
+  if (!arrived) trackCurves(view, obs);
   for (const ev of events) handleDriveEvent(ev, obs);
   if (drive.engine) renderDrive(view, obs);
 }
@@ -586,6 +720,7 @@ function say(text) {
 function handleDriveEvent(ev, obs) {
   switch (ev.type) {
     case 'release':
+      hideAsk(); // signalen går före; frågan finns kvar i sammanfattningen
       if (!drive.muted) { ev.brakeNeeded ? sounds.warn() : sounds.release(); }
       setTimeout(() => say(releaseMessage(ev)), 550);
       drive.flashUntil = Date.now() + 2500;
@@ -734,7 +869,7 @@ $('d-stop').addEventListener('click', () => {
   const stats = drive.engine ? { ...drive.engine.stats, endT: drive.lastObs?.t ?? null } : null;
   stopDrive();
   drive.engine = null;
-  if (stats && stats.signals > 0) showSummary(stats);
+  if (stats && (stats.signals > 0 || (drive.curveLog || []).length)) showSummary(stats);
   else back();
 });
 window.addEventListener('resize', () => {
@@ -753,10 +888,36 @@ function showSummary(st) {
     [st.late, 'sena signaler'],
     [st.brakeWarnings, 'backvarningar'],
   ].map(([b, s]) => `<div class="stat"><b>${esc(b)}</b><span>${esc(s)}</span></div>`).join('');
+  renderCurveSummary();
   stack.length = 0;
   stack.push('home');
   show('summary');
 }
+function renderCurveSummary() {
+  const log = drive.curveLog || [];
+  $('sum-curves-title').hidden = !log.length;
+  const ul = $('sum-curves');
+  ul.innerHTML = '';
+  for (const rec of log) {
+    const li = document.createElement('li');
+    const name = `Kurva vid ${fmtDist(rec.s)}, ${rec.dir === 'left' ? 'vänster' : 'höger'}`;
+    const meta = rec.valid
+      ? `${fmtG(rec.peakG)} · planerat ${fmtG(rec.plannedG)} · högst ${kmh(rec.maxV)} km/h`
+      : `Inte mätt: ${rec.reason}`;
+    let right;
+    if (rec.answer === 'ok') right = '<span class="curve-chip ok">Okej</span>';
+    else if (rec.answer === 'too_much') right = '<span class="curve-chip over">För mycket</span>';
+    else if (rec.ask) right = '<span class="curve-answer"><button class="btn small" data-a="ok">Okej</button><button class="btn small danger-fill" data-a="too_much">För mycket</button></span>';
+    else right = `<span class="curve-chip">${rec.valid ? 'inom planerat' : '–'}</span>`;
+    li.innerHTML = `<span class="curve-name">${esc(name)}</span>${right}<span class="curve-meta">${esc(meta)}</span>`;
+    li.querySelectorAll('button[data-a]').forEach(b => b.addEventListener('click', () => {
+      answerCurve(rec, b.dataset.a);
+      renderCurveSummary();
+    }));
+    ul.appendChild(li);
+  }
+}
+
 $('sum-done').addEventListener('click', () => { stack.length = 0; show('home'); });
 
 // ---------- Inställningar ----------
@@ -776,6 +937,9 @@ function enterSettings() {
   bindRange('set-rb', 'roundaboutKmh', v => `${v} km/h`, s);
   $('set-voice').checked = s.voice;
   $('set-trailer').checked = s.trailer;
+  $('set-learn').checked = s.learnCurves;
+  $('set-ask').checked = s.askCurvesInDrive;
+  renderLearnShow();
   bindRange('set-tmax', 'trailerMaxKmh', v => `${v} km/h`, s);
   bindGForce(s, 'set-talat', 'trailerALat');
   const ct = store.calibrationTrailer;
@@ -808,6 +972,22 @@ function bindRange(id, key, fmt, s) {
   };
 }
 $('set-voice').addEventListener('change', e => { store.settings = { ...store.settings, voice: e.target.checked }; });
+function renderLearnShow() {
+  const s = store.settings, n = store.curveLearn;
+  const car = `Utan släp: ${fmtG(s.aLat / 9.81)}${n.car ? ` · inlärd från ${n.car} svar` : ''}`;
+  const tr = `Med släp: ${fmtG(s.trailerALat / 9.81)}${n.trailer ? ` · inlärd från ${n.trailer} svar` : ''}`;
+  $('set-learn-show').textContent = `${car}. ${tr}.`;
+}
+$('set-learn').addEventListener('change', e => { store.settings = { ...store.settings, learnCurves: e.target.checked }; });
+$('set-ask').addEventListener('change', e => { store.settings = { ...store.settings, askCurvesInDrive: e.target.checked }; });
+$('set-learn-reset').addEventListener('click', () => {
+  store.settings = { ...store.settings, aLat: DEFAULT_SETTINGS.aLat, trailerALat: DEFAULT_SETTINGS.trailerALat };
+  store.curveLearn = { car: 0, trailer: 0 };
+  store.curveAnswers = [];
+  enterSettings();
+  toast('Sidokraften är återställd till 0,25 g (släp 0,18 g).');
+});
+
 $('set-trailer').addEventListener('change', e => { setTrailer(e.target.checked); });
 $('set-tcalib-redo').addEventListener('click', () => {
   if (!trailerOn()) setTrailer(true);

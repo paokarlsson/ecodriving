@@ -24,6 +24,13 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - **Rekommenderad kurvfart** räknas ur kurvradien och vald sidokraft (standard 0,25 g; 1 g = 9,81 m/s²). Över 50 km/h sänks sidokraften gradvis till 65 % vid 110 km/h.
 - **Släpvagnsläge** (hemskärmen, ruttöversikten eller Inställningar): skyltad gräns men högst 80 km/h (inställbart, t.ex. 40 km/h för tung obromsad släpvagn), sidokraft 0,18 g i kurvor och en egen kalibrering. Utan rullprov med släpet uppskattas modellen från bilens värden.
 
+## Uppmätt kurvkraft (gyro)
+
+- Gyrot mäter bilens vridhastighet kring lodlinjen (oberoende av hur telefonen sitter); sidokraften är `a = v · ω` med farten från GPS.
+- Under kurvan visas en mätare med uppmätt mot planerad sidokraft. Var toppen mer än 15 % över planerat frågar appen efter kurvan, på rak väg: *Okej* eller *För mycket*. Obesvarade frågor finns i sammanfattningen.
+- Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar. Bil och släp lär sig var för sig.
+- Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
+
 ## Utveckling
 
 Ingen byggprocess – rena ES-moduler.
@@ -43,6 +50,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/api.js` | OpenRouteService (rutt, geokodning) och Open-Meteo (höjd) |
 | `js/sensors.js`, `js/audio.js`, `js/mapview.js` | Webbläsarens sensorer, ljud/röst, karta på canvas |
 | `js/app.js` | Vyer och flöden |
+| `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/trailer.js` | Släpvagnsläge: maxfart och uppskattad rullmodell |
 | `js/demo.js`, `js/sim.js` | Syntetisk demorutt och simulerad bil |
 

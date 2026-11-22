@@ -19,12 +19,14 @@ function set(k, v) {
 export const DEFAULT_SETTINGS = Object.freeze({
   marginS: 1.5,        // reaktionsmarginal (s)
   voice: true,         // röst eller bara ton
-  aLat: 2.5,           // komfort i kurvor (m/s²)
+  aLat: 2.45,          // sidokraft i kurvor (m/s²), 0,25 g
   giveWayKmh: 20,
   roundaboutKmh: 25,
   trailer: false,      // släpvagnsläge
   trailerMaxKmh: 80,
   trailerALat: 1.77,   // 0,18 g
+  learnCurves: true,      // låt svar om kurvkraft justera sidokraften
+  askCurvesInDrive: true, // fråga direkt efter kurvan (annars i sammanfattningen)
 });
 
 export const store = {
@@ -36,6 +38,12 @@ export const store = {
   set settings(v) { set('settings', v); },
   get calibrationTrailer() { return get('calibrationTrailer'); },
   set calibrationTrailer(v) { set('calibrationTrailer', v); },
+  /** Antal svar som justerat sidokraften: {car, trailer}. */
+  get curveLearn() { return get('curveLearn', { car: 0, trailer: 0 }); },
+  set curveLearn(v) { set('curveLearn', v); },
+  /** De senaste svaren om kurvkraft (högst 200). */
+  get curveAnswers() { return get('curveAnswers', []); },
+  set curveAnswers(v) { set('curveAnswers', (v || []).slice(-200)); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

@@ -80,13 +80,24 @@ export function watchGps(onObs, onError = () => {}) {
   return () => navigator.geolocation.clearWatch(id);
 }
 
-/** Linjär acceleration utan tyngdkraft (m/s²) och rotationshastighet. */
+/**
+ * Rörelsesensorerna: linjär acceleration utan tyngdkraft (ax, ay, az, m/s²),
+ * acceleration med tyngdkraft (gx, gy, gz) och gyrots rotationshastighet
+ * (rot, grader/s). Fält som telefonen saknar är null.
+ */
 export function watchMotion(onMotion) {
   const h = e => {
     const a = e.acceleration;
+    const ag = e.accelerationIncludingGravity;
     const r = e.rotationRate;
-    if (!a || a.x == null) return;
-    onMotion({ t: Date.now() / 1000, ax: a.x, ay: a.y, az: a.z, rot: r ? { a: r.alpha, b: r.beta, g: r.gamma } : null });
+    const hasA = a && a.x != null, hasG = ag && ag.x != null, hasR = r && r.alpha != null;
+    if (!hasA && !hasG) return;
+    onMotion({
+      t: Date.now() / 1000,
+      ax: hasA ? a.x : null, ay: hasA ? a.y : null, az: hasA ? a.z : null,
+      gx: hasG ? ag.x : null, gy: hasG ? ag.y : null, gz: hasG ? ag.z : null,
+      rot: hasR ? { alpha: r.alpha, beta: r.beta, gamma: r.gamma } : null,
+    });
   };
   window.addEventListener('devicemotion', h);
   return () => window.removeEventListener('devicemotion', h);
