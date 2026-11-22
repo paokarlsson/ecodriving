@@ -21,7 +21,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 ## Kurvor och släpvagn
 
-- **Kurvradien** tas ur ruttens riktningsändring över ±20 m för tvära svängar (minst 30°), annars över ±50 m, så att hörn i den förenklade ruttlinjen inte blir falska kurvor. Kurvor med mindre än 150 m emellan slås ihop.
+- **Kurvradien** räknas hörn för hörn i ruttens linje: varje hörn får den största båge som ryms i linjens geometri (avviker högst 5 m från hörnet och får plats på halva sträckorna till grannhörnen). Glest ritade hörn blir då mjuka kurvor som på den verkliga vägen, tätt ritade kurvor får sin riktiga radie och tvära korsningar förblir skarpa. Kurvor med mindre än 150 m emellan slås ihop.
 - **Rekommenderad kurvfart** räknas ur kurvradien och vald sidokraft (standard 0,25 g; 1 g = 9,81 m/s²). Över 50 km/h sänks sidokraften gradvis till 65 % vid 110 km/h.
 - **Släpvagnsläge** (hemskärmen, ruttöversikten eller Inställningar): skyltad gräns men högst 80 km/h (inställbart, t.ex. 40 km/h för tung obromsad släpvagn), sidokraft 0,18 g i kurvor och en egen kalibrering. Utan rullprov med släpet uppskattas modellen från bilens värden.
 

@@ -139,37 +139,50 @@ export function curveSpeedForRadius(R, base) {
   return v;
 }
 
-/** Riktningsändring (rad, utan tecken) mellan sträckan in mot i och ut från i, k sampel långa. */
-function turnAngle(route, i, k) {
-  const a = Math.max(0, i - k), c = Math.min(route.n - 1, i + k);
-  if (a === i || c === i) return 0;
-  const h1 = Math.atan2(route.Y[i] - route.Y[a], route.X[i] - route.X[a]);
-  const h2 = Math.atan2(route.Y[c] - route.Y[i], route.X[c] - route.X[i]);
-  let d = Math.abs(h2 - h1);
-  if (d > Math.PI) d = 2 * Math.PI - d;
-  return d;
-}
+/** Hur mycket den verkliga vägen kan avvika från ruttens linje (m). */
+export const GEOM_TOLERANCE = 5;
 
 /**
- * Kurvradie vid varje sampel. Ruttens linje är förenklad: en lång, mjuk
- * kurva kan ritas som några få hörn på 3–8°. Radien från bara ±20 m gör
- * ett sådant hörn till en skarp kurva. Därför:
- *  - tvär sväng (minst 30° inom ±20 m, t.ex. korsning eller rondell):
- *    radien från ±20 m,
- *  - annars den största av radierna från ±20 m och ±50 m, så att ett
- *    enstaka hörn sprids ut över den sträcka bilen har på sig.
- * Radie = halva fönstret / riktningsändringen (cirkelbåge).
+ * Kurvradie vid varje sampel, räknad hörn för hörn i ruttens linje.
+ *
+ * Linjen är en förenkling av vägen: där den bryter med vinkeln θ svänger
+ * den verkliga vägen θ i en båge någonstans runt hörnet. Varje hörn får den
+ * största båge som ryms i linjens geometri:
+ *  - bågen får avvika högst GEOM_TOLERANCE från hörnet:
+ *      R ≤ tol / (1/cos(θ/2) − 1)
+ *  - bågen måste få plats på halva sträckorna till grannhörnen
+ *    (grannhörnens bågar delar på samma sträcka):
+ *      R ≤ (min(l1, l2) / 2) / tan(θ/2)
+ * Ett hörn på 13° mellan 150 m långa sträckor blir då en kurva med radie
+ * runt 620 m (som i verkligheten), en kurva ritad med täta punkter får sin
+ * verkliga radie, och ett hörn på 90° i en korsning kan bara rymma en båge
+ * på ca 12 m. Punkter närmare än 5 m slås ihop så att små skakningar i
+ * linjen inte blir skarpa kurvor.
  */
-export function curveRadii(route) {
-  const k20 = Math.max(1, Math.round(20 / route.step));
-  const k50 = Math.max(k20 + 1, Math.round(50 / route.step));
+export function curveRadii(route, { tol = GEOM_TOLERANCE, minSeg = 5 } = {}) {
+  const P = route.pts;
+  const V = [P[0]];
+  for (let k = 1; k < P.length; k++) {
+    const last = V[V.length - 1];
+    if (Math.hypot(P[k].x - last.x, P[k].y - last.y) >= minSeg || k === P.length - 1) V.push(P[k]);
+  }
   const R = new Float64Array(route.n).fill(Infinity);
-  for (let i = 1; i < route.n - 1; i++) {
-    const t20 = turnAngle(route, i, k20);
-    const t50 = turnAngle(route, i, k50);
-    const r20 = t20 > 1e-6 ? (k20 * route.step) / t20 : Infinity;
-    const r50 = t50 > 1e-6 ? (k50 * route.step) / t50 : Infinity;
-    R[i] = t20 >= 30 * Math.PI / 180 ? r20 : Math.max(r20, r50);
+  for (let j = 1; j < V.length - 1; j++) {
+    const a = V[j - 1], b = V[j], c = V[j + 1];
+    const l1 = Math.hypot(b.x - a.x, b.y - a.y), l2 = Math.hypot(c.x - b.x, c.y - b.y);
+    if (l1 < 1e-6 || l2 < 1e-6) continue;
+    let th = Math.abs(Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(b.y - a.y, b.x - a.x));
+    if (th > Math.PI) th = 2 * Math.PI - th;
+    if (th < 1e-4) continue;
+    const half = Math.min(th / 2, Math.PI / 2 - 1e-3);
+    const rTangent = (Math.min(l1, l2) / 2) / Math.tan(half);
+    const rTol = tol / (1 / Math.cos(half) - 1);
+    const r = Math.min(rTangent, rTol);
+    // Bågen sträcker sig tangentlängden r·tan(θ/2) åt båda håll från hörnet
+    const reach = Math.max(route.step / 2, r * Math.tan(half));
+    const i0 = Math.max(0, Math.floor((b.s - reach) / route.step));
+    const i1 = Math.min(route.n - 1, Math.ceil((b.s + reach) / route.step));
+    for (let i = i0; i <= i1; i++) if (r < R[i]) R[i] = r;
   }
   return R;
 }
