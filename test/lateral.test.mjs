@@ -40,7 +40,7 @@ function driveCurve(kmh) {
   for (let s = 1200; s < 1700 && !rec; s += v * 0.05) {
     t += 0.05;
     m.setSpeed(v);
-    m.addYaw(t, routeYaw(r, s, v), 0.05);
+    m.addYaw(t, routeYaw(r, s, v, 10), 0.05);
     tr.sample(t, m.current().a, v, m.current().yaw);
     for (const e of tr.update(s, t, v, m)) if (e.type === 'exit') rec = e.record;
   }
@@ -66,7 +66,7 @@ test('gyro som inte stämmer med kartan underkänns', () => {
   let rec = null, t = 0;
   for (let s = 1300; s < 1600 && !rec; s += 0.5) {
     t += 0.05; m.setSpeed(10);
-    m.addYaw(t, routeYaw(r, s, 10) * 0.4, 0.05); // lös hållare: bara 40 % av svängen syns
+    m.addYaw(t, routeYaw(r, s, 10, 10) * 0.4, 0.05); // lös hållare: bara 40 % av svängen syns
     tr.sample(t, m.current().a, 10, m.current().yaw);
     for (const e of tr.update(s, t, 10, m)) if (e.type === 'exit') rec = e.record;
   }
@@ -119,4 +119,54 @@ test('bollen: vänstersväng trycker åt höger, tecknet lärs av rutten', () =>
   const r = new LateralMeter();
   r.setSpeed(20);
   assert.equal(Math.abs(r.current().side), 0);
+});
+
+test('gyrot lär sig axeln när telefonen anger svängen på fel axel', () => {
+  // Telefon lutad 12° bakåt i hållaren. Webbläsaren lägger svängen (som borde
+  // ligga på y-axeln, "gamma") i "beta" istället – som i loggen, där gyrot bara
+  // såg ca sin(12°) ≈ 0,2 av svängen.
+  const tilt = 12 * Math.PI / 180;
+  const grav = { gx: 0, gy: 9.81 * Math.cos(tilt), gz: 9.81 * Math.sin(tilt) };
+  const m = new LateralMeter();
+  m.setSpeed(25);
+  let t = 0;
+  const feed = rightRad => {
+    const deg = rightRad * 180 / Math.PI;
+    // Sant: sväng höger = negativ rotation kring "upp". Uppåt i telefonen ≈ y (och lite z).
+    const wy = -deg * Math.cos(tilt), wz = -deg * Math.sin(tilt);
+    // Fel i webbläsaren: y-rotationen hamnar i beta, x-rotationen (0) i gamma
+    m.addMotion({ t, rot: { alpha: wz, beta: wy, gamma: 0 }, ...grav });
+    m.learn(rightRad);
+    t += 0.02;
+  };
+  // Före inlärning: för lite (som i loggen)
+  for (let i = 0; i < 40; i++) feed(0.1);
+  const before = Math.abs(m.current().yaw);
+  assert.ok(before < 0.04, `före ${before}`);
+  // Kurvor åt båda håll lär in axeln
+  for (let k = 0; k < 6; k++) for (let i = 0; i < 100; i++) feed(0.1 * Math.sin(i / 100 * Math.PI) * (k % 2 ? -1 : 1));
+  assert.ok(m.axis, 'axeln inlärd');
+  for (let i = 0; i < 100; i++) feed(0.1);
+  const after = m.current();
+  assert.ok(Math.abs(after.yaw - 0.1) < 0.01, `efter ${after.yaw}`);
+  assert.ok(Math.abs(after.g - 25 * 0.1 / 9.81) < 0.02);
+  assert.ok(after.side < 0, 'högersväng trycker åt vänster');
+});
+
+test('gyrot klarar rad/s i stället för grader/s', () => {
+  const m = new LateralMeter();
+  m.setSpeed(20);
+  let t = 0;
+  const feed = rightRad => { m.addMotion({ t, rot: { alpha: -rightRad, beta: 0, gamma: 0 }, gx: 0, gy: 0, gz: 9.81 }); m.learn(rightRad); t += 0.02; };
+  for (let k = 0; k < 6; k++) for (let i = 0; i < 100; i++) feed(0.15 * Math.sin(i / 100 * Math.PI) * (k % 2 ? -1 : 1));
+  for (let i = 0; i < 100; i++) feed(0.15);
+  assert.ok(Math.abs(m.current().yaw - 0.15) < 0.015, `${m.current().yaw}`);
+});
+
+test('stötar mot telefonen ignoreras', () => {
+  const m = new LateralMeter();
+  m.setSpeed(25);
+  for (let i = 0; i < 50; i++) m.addMotion({ t: i * 0.02, rot: { alpha: 0, beta: 0, gamma: 0 }, gx: 0, gy: 0, gz: 9.81 });
+  m.addMotion({ t: 1.0, rot: { alpha: 400, beta: 300, gamma: 0 }, gx: 0, gy: 0, gz: 9.81 });
+  assert.ok(m.current().g < 0.05, `${m.current().g}`);
 });

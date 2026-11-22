@@ -452,6 +452,7 @@ async function prepare(coords, elements = null, onStep = () => {}) {
       route = buildRoute(withEle);
     } catch { warnings.push('Höjddata saknas – backar räknas inte in.'); }
   }
+  let osmStats = null;
   if (!elements) {
     const t0 = performance.now();
     try {
@@ -461,8 +462,13 @@ async function prepare(coords, elements = null, onStep = () => {}) {
           if (total) onStep(`Hämtar trafikljus och hastighetsgränser… ${done}/${total}`);
         },
       });
+      osmStats = elements.stats;
+      if (osmStats?.failed) {
+        warnings.push(`Vägdata saknas för ${osmStats.failed} av ${osmStats.batches} delar av rutten (${osmStats.error}). Där saknas gränser och trafikljus.`);
+      }
     } catch (e) {
       elements = [];
+      osmStats = e.stats || { error: e.message };
       warnings.push(`Kunde inte hämta trafikljus och hastighetsgränser (${e.message}). Bara kurvor används.`);
     }
     console.info(`Vägdata: ${Math.round(performance.now() - t0)} ms`);
@@ -474,7 +480,7 @@ async function prepare(coords, elements = null, onStep = () => {}) {
       ? 'Ingen hastighetsgräns hittades i OpenStreetMap längs rutten. Fartmål för gränser saknas, övriga fartmål gäller.'
       : `Hastighetsgräns finns i OpenStreetMap för bara ${Math.round(coverage * 100)} % av rutten; resten räknas med närmaste kända gräns.`);
   }
-  return computeTargets({ route, elements, rawLimits, coverage, warnings });
+  return computeTargets({ route, elements, rawLimits, coverage, warnings, osmStats });
 }
 
 // ---------- Resmål som överlever omladdning ----------
@@ -615,6 +621,9 @@ function startDrive() {
   drive.coastStart = null;
   drive.rerouting = false;
   drive.meter = new LateralMeter();
+  // Telefonen sitter oftast likadant: börja med förra körningens inlärda axel
+  const ga = store.gyroAxis;
+  if (ga && Array.isArray(ga.axis) && !plan.demo) { drive.meter.axis = ga.axis; drive.meter.axisR2 = ga.r2; }
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
   drive.askQueue = [];
@@ -638,7 +647,7 @@ function startDrive() {
       const obs = drive.sim.step(1, plan.targets);
       // Simulerat gyro: bilens vridhastighet ur ruttens form
       drive.meter.setSpeed(obs.speed);
-      drive.meter.addYaw(obs.t, routeYaw(plan.route, drive.sim.s, obs.speed), 1);
+      drive.meter.addYaw(obs.t, routeYaw(plan.route, drive.sim.s, obs.speed, 10), 1);
       sampleCurve(obs.t);
       onDriveObs(obs);
     }, 250);
@@ -658,6 +667,8 @@ function routeMeta(p) {
   return {
     lengthM: r1(p.route.length),
     limitCoverage: p.coverage != null ? Math.round(p.coverage * 100) / 100 : null,
+    osm: p.osmStats ? { ...p.osmStats, elements: p.elements ? p.elements.length : null } : null,
+    warnings: p.warnings || [],
     targets: p.targets.map(t => ({ s: r1(t.s), kmh: r1(t.v * 3.6), kind: t.kind })),
     curves: (p.curves || []).map(c => ({ s: r1(c.s), sEnd: r1(c.sEnd), kmh: r1(c.v * 3.6), radiusM: r1(c.radius), dir: c.dir })),
   };
@@ -670,7 +681,13 @@ function modelSource() {
 
 function saveDriveLog(stats = null) {
   if (!drive.log) return;
-  if (stats) drive.log.finish({ ...stats, curves: (drive.curveLog || []).length });
+  const m = drive.meter;
+  if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, date: new Date().toISOString() };
+  if (stats) drive.log.finish({
+    ...stats, curves: (drive.curveLog || []).length,
+    gyroAxis: m?.axis ? m.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
+    gyroAxisR2: m?.axisR2 ?? null, gyroSign: m?.sign ?? null,
+  });
   logStore.save(drive.log);
   drive.logSavedAt = Date.now();
 }
@@ -693,7 +710,15 @@ let gmeterAt = 0;
 function sampleCurve(t) {
   if (!drive.meter) return;
   // Lär gyrots tecken av rutten (vilket håll som är höger på just den här telefonen)
-  if (drive.engine && plan) drive.meter.learnSign(routeYaw(plan.route, drive.engine.s, drive.meter.v));
+  // Lär gyrots axel och tecken mot rutten, bara när bilen rör sig och följer den
+  if (drive.engine && plan && !drive.engine.paused && drive.meter.v > 5) {
+    const hadAxis = !!drive.meter.axis;
+    drive.meter.learn(routeYaw(plan.route, drive.engine.s, drive.meter.v));
+    if (!hadAxis && drive.meter.axis && !plan.demo) {
+      store.gyroAxis = { axis: drive.meter.axis, r2: drive.meter.axisR2, date: new Date().toISOString() };
+      drive.log?.event(t, 'gyroAxis', { axis: drive.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: drive.meter.axisR2 });
+    }
+  }
   if (drive.tracker && drive.tracker.inside()) {
     const c = drive.meter.current();
     drive.tracker.sample(t, c.a, drive.meter.v, c.yaw);

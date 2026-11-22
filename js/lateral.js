@@ -31,37 +31,50 @@ export function yawFromGyro(rot, grav) {
   return ((wx * grav[0] + wy * grav[1] + wz * grav[2]) / n) * DEG;
 }
 
-/** Håller lodlinje, nollpunkt och utjämnad vridhastighet. */
+/** Löser (M + λI) k = b för 3×3 med Gausselimination. */
+function solve3(M, b, ridge) {
+  const A = M.map((row, i) => [...row.map((x, j) => x + (i === j ? ridge : 0)), b[i]]);
+  for (let c = 0; c < 3; c++) {
+    let p = c;
+    for (let r = c + 1; r < 3; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    if (Math.abs(A[p][c]) < 1e-12) return null;
+    [A[c], A[p]] = [A[p], A[c]];
+    for (let r = 0; r < 3; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 4; k++) A[r][k] -= f * A[c][k];
+    }
+  }
+  return [A[0][3] / A[0][0], A[1][3] / A[1][1], A[2][3] / A[2][2]];
+}
+
+/**
+ * Håller lodlinje, nollpunkt och utjämnad vridhastighet (höger sväng positiv).
+ *
+ * Telefoner och webbläsare anger gyrots axlar, enheter och tecken olika.
+ * Mätaren lär sig därför själv vilken kombination av gyrots tre axlar som är
+ * "sväng" genom att jämföra med hur rutten svänger (minsta kvadrat). Tills
+ * det är inlärt används rotationen kring tyngdkraftens riktning enligt
+ * standarden, med tecken som också lärs in mot rutten.
+ */
 export class LateralMeter {
   constructor() {
     this.grav = null;
     this.lastT = null;
     this.bias = 0;
     this.biasReady = false;
-    this.yaw = 0;          // utjämnad, nollpunktskorrigerad (rad/s)
+    this.yaw = 0;          // utjämnad, nollpunktskorrigerad, höger positiv (rad/s)
     this.turn = 0;         // integrerad svängvinkel (rad)
     this.v = 0;
     this.straight = false; // sätts av appen ur rutten (rak väg eller stillastående)
-    // Gyrots tecken skiljer mellan plattformar. Det lärs in genom att jämföra
-    // med rutten: positiv "högersväng" = medurs sett ovanifrån.
-    this.sign = null;
+    this.sign = null;      // reservvägens tecken
     this.signAcc = 0;
-    this.defaultSign = -1; // Android: positiv rotation kring "upp" = vänster
-  }
-
-  /**
-   * Jämför gyrot med förväntad sväng ur rutten (rad/s, höger positiv).
-   * Efter några tydliga kurvsampel vet mätaren vilket håll som är höger.
-   */
-  learnSign(expectedRight) {
-    if (Math.abs(expectedRight) < 0.03 || Math.abs(this.yaw) < 0.02) return;
-    this.signAcc = Math.max(-1, Math.min(1, this.signAcc + expectedRight * this.yaw));
-    if (Math.abs(this.signAcc) > 0.05) this.sign = Math.sign(this.signAcc);
-  }
-
-  /** Vridhastighet med höger sväng positiv (rad/s). */
-  rightYaw() {
-    return this.yaw * (this.sign ?? this.defaultSign);
+    this.defaultSign = -1; // standard: positiv rotation kring "upp" = vänster
+    this.lastPlat = null;  // senaste vridhastighet enligt standarden (rad/s)
+    this.lastRot = null;   // senaste råa gyrovektor [x, y, z] (grader/s enligt standarden)
+    this.axis = null;      // inlärd: sväng höger (rad/s) = axis · rå gyrovektor
+    this.axisR2 = null;
+    this.reg = { M: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b: [0, 0, 0], ee: 0, n: 0, since: 0 };
   }
 
   setSpeed(v) { this.v = Math.max(0, v || 0); }
@@ -69,30 +82,84 @@ export class LateralMeter {
 
   /** m = {t (s), rot: {alpha, beta, gamma}, gx, gy, gz} från devicemotion. */
   addMotion(m) {
-    if (m.gx == null || !m.rot) return;
+    if (!m.rot) return;
     const dt = this.dt(m.t);
-    const g = [m.gx, m.gy, m.gz];
-    if (!this.grav) this.grav = g;
-    else {
-      const k = dt / (LATERAL.gravityTau + dt);
-      this.grav = this.grav.map((x, i) => x + k * (g[i] - x));
+    if (m.gx != null) {
+      const g = [m.gx, m.gy, m.gz];
+      if (!this.grav) this.grav = g;
+      else {
+        const k = dt / (LATERAL.gravityTau + dt);
+        this.grav = this.grav.map((x, i) => x + k * (g[i] - x));
+      }
     }
-    const w = yawFromGyro(m.rot, this.grav);
-    if (w != null) this.addYaw(m.t, w, dt);
+    const r = [m.rot.beta ?? 0, m.rot.gamma ?? 0, m.rot.alpha ?? 0];
+    this.lastRot = r;
+    this.lastPlat = this.grav ? yawFromGyro(m.rot, this.grav) : null;
+    let wRight;
+    if (this.axis) wRight = this.axis[0] * r[0] + this.axis[1] * r[1] + this.axis[2] * r[2];
+    else if (this.lastPlat != null) wRight = this.lastPlat * (this.sign ?? this.defaultSign);
+    else return;
+    this.integrate(wRight, dt);
   }
 
-  /** Direkt vridhastighet (rad/s), t.ex. från simulering. */
+  /** Vridhastighet enligt standardens tecken (rad/s), t.ex. från simulering. */
   addYaw(t, w, dt = this.dt(t)) {
+    this.lastPlat = w;
+    this.integrate(w * (this.sign ?? this.defaultSign), dt);
+  }
+
+  integrate(wRight, dt) {
+    // Ingen bil svänger fortare än ca 70°/s; större värden är stötar mot telefonen.
+    if (!Number.isFinite(wRight) || Math.abs(wRight) > 1.2) return;
     if (this.straight) {
       const k = dt / (LATERAL.biasTau + dt);
-      this.bias += (this.biasReady ? k : Math.min(1, k * 10)) * (w - this.bias);
+      this.bias += (this.biasReady ? k : Math.min(1, k * 10)) * (wRight - this.bias);
       this.biasReady = true;
     }
-    const wc = w - this.bias;
+    const wc = wRight - this.bias;
     const k = dt / (LATERAL.yawTau + dt);
     this.yaw += k * (wc - this.yaw);
     this.turn += wc * dt;
   }
+
+  /**
+   * Jämför med förväntad sväng ur rutten (rad/s, höger positiv): lär in
+   * reservvägens tecken och gyrots axel.
+   */
+  learn(expectedRight) {
+    if (Math.abs(expectedRight) < 0.03) return;
+    if (this.lastPlat != null && Math.abs(this.lastPlat) > 0.01) {
+      this.signAcc = Math.max(-1, Math.min(1, this.signAcc + expectedRight * this.lastPlat));
+      if (Math.abs(this.signAcc) > 0.05) this.sign = Math.sign(this.signAcc);
+    }
+    const r = this.lastRot;
+    if (!r) return;
+    const R = this.reg;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) R.M[i][j] += r[i] * r[j];
+      R.b[i] += r[i] * expectedRight;
+    }
+    R.ee += expectedRight * expectedRight;
+    R.n++;
+    if (R.n >= 100 && R.n - R.since >= 25) {
+      R.since = R.n;
+      const tr = R.M[0][0] + R.M[1][1] + R.M[2][2];
+      const k = solve3(R.M, R.b, 1e-3 * tr / 3);
+      if (!k) return;
+      // R² för passningen: 1 − SSR/Σe², SSR = Σe² − 2k·b + kᵀMk
+      let kMk = 0;
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) kMk += k[i] * R.M[i][j] * k[j];
+      const kb = k[0] * R.b[0] + k[1] * R.b[1] + k[2] * R.b[2];
+      const r2 = 1 - (R.ee - 2 * kb + kMk) / R.ee;
+      if (r2 > 0.5) { this.axis = k; this.axisR2 = r2; }
+    }
+  }
+
+  /** Bakåtkompatibelt namn. */
+  learnSign(expectedRight) { this.learn(expectedRight); }
+
+  /** Vridhastighet med höger sväng positiv (rad/s). */
+  rightYaw() { return this.yaw; }
 
   dt(t) {
     const d = this.lastT == null ? 0.02 : Math.min(0.5, Math.max(0, t - this.lastT));
@@ -106,7 +173,7 @@ export class LateralMeter {
    */
   current() {
     const a = this.v * Math.abs(this.yaw);
-    const side = -(this.v * this.rightYaw()) / G;
+    const side = -(this.v * this.yaw) / G;
     return { a, g: a / G, yaw: this.yaw, side };
   }
 }
@@ -224,8 +291,8 @@ export function isStraightAt(route, s) {
 }
 
 /** Signerad vridhastighet (rad/s) för en bil som följer rutten i farten v – för simulering. */
-export function routeYaw(route, s, v) {
-  const a = Math.max(0, s - 10), b = Math.min(route.length, s + 10);
+export function routeYaw(route, s, v, half = 30) {
+  const a = Math.max(0, s - half), b = Math.min(route.length, s + half);
   if (b - a < 1) return 0;
   const ia = Math.round(a / route.step), ib = Math.round(b / route.step);
   let d = route.H[Math.min(route.n - 1, ib)] - route.H[Math.min(route.n - 1, ia)];

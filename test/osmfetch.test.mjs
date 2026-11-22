@@ -66,7 +66,38 @@ test('svarar en server inte används nästa', async () => {
     if (url.includes('overpass-api.de')) { n++; return { ok: false, status: 504 }; }
     return ok.fetchImpl(url, opts);
   };
-  const got = await fetchOsmAlongRoute(r, { fetchImpl });
+  const got = await fetchOsmAlongRoute(r, { fetchImpl, waits: [0] });
   assert.ok(n >= 1);
   assert.ok(got.length > 0);
+});
+
+test('"för många anrop" ger nytt försök, och en trasig del stoppar inte resten', async () => {
+  const { coords, elements } = demoData();
+  const r = buildRoute(coords);
+  const ok = fakeOverpass(elements);
+  let calls = 0;
+  // Var tredje anrop nekas med 429 första gången
+  const seen = new Set();
+  const fetch429 = async (url, opts) => {
+    calls++;
+    if (!seen.has(opts.body)) { seen.add(opts.body); return { ok: false, status: 429 }; }
+    return ok.fetchImpl(url, opts);
+  };
+  const got = await fetchOsmAlongRoute(r, { fetchImpl: fetch429, cellsPerRequest: 4, waits: [0, 0] });
+  assert.equal(got.stats.failed, 0);
+  assert.ok(calls > got.stats.batches);
+  assert.equal(countKinds(buildTargets(r, got, assignLimits(r, got), { aLat: 2.5 })).traffic_signals, 1);
+
+  // En del misslyckas alltid: resten kommer ändå, och statistiken säger det
+  let first = null;
+  const fetchOneBad = async (url, opts) => {
+    if (first == null) first = opts.body;
+    if (opts.body === first) return { ok: false, status: 504 };
+    return ok.fetchImpl(url, opts);
+  };
+  const part = await fetchOsmAlongRoute(r, { fetchImpl: fetchOneBad, cellsPerRequest: 4, waits: [0, 0] });
+  assert.equal(part.stats.failed, 1);
+  assert.ok(part.stats.batches > 1);
+  assert.ok(part.length > 0);
+  assert.match(part.stats.error, /504/);
 });

@@ -50,6 +50,9 @@ export const store = {
   /** De senaste resmålen (högst 5). */
   get recents() { return get('recents', []); },
   set recents(v) { set('recents', (v || []).slice(0, 5)); },
+  /** Inlärd gyroaxel {axis: [x, y, z], r2, date}. */
+  get gyroAxis() { return get('gyroAxis'); },
+  set gyroAxis(v) { set('gyroAxis', v); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

@@ -56,7 +56,7 @@ test('timeout-svar från Overpass sparas inte i cachen', async () => {
   const cache = { get: k => store.get(k) || null, set: (k, v) => store.set(k, v) };
   let calls = 0;
   const fetchImpl = async () => { calls++; return { ok: true, json: async () => ({ elements: [], remark: 'runtime error: Query timed out in "query" at line 3 after 60 seconds.' }) }; };
-  await assert.rejects(fetchOsmAlongRoute(r, { fetchImpl, cache }), /Overpass/);
+  await assert.rejects(fetchOsmAlongRoute(r, { fetchImpl, cache, waits: [0] }), /Overpass/);
   assert.equal(store.size, 0);
   assert.ok(calls >= 2, 'provade båda servrarna');
   assert.ok(routeCells(r).length > 0);

@@ -5,7 +5,13 @@ import { matchToRoute, curveTargets } from './route.js';
 export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ];
+
+const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  const t = setTimeout(resolve, ms);
+  signal?.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('Avbruten', 'AbortError')); }, { once: true });
+});
 
 /** Tolkar OSM:s maxspeed-tagg till km/h. */
 export function parseMaxspeed(v) {
@@ -126,7 +132,26 @@ function cellsOfElement(el, wanted) {
   return out;
 }
 
-async function overpassFetch(query, { fetchImpl, signal, timeoutMs }) {
+/**
+ * Ett anrop till Overpass. Servrarna är gratis och delade: "för många anrop"
+ * (429), överbelastning (502–504) och timeout är vanliga. Varje server provas
+ * i tur och ordning, i upp till tre omgångar med väntan emellan.
+ */
+async function overpassFetch(query, { fetchImpl, signal, timeoutMs, waits = [0, 3000, 8000] }) {
+  let lastErr;
+  for (const wait of waits) {
+    if (wait) await sleep(wait, signal);
+    try {
+      return await overpassRound(query, { fetchImpl, signal, timeoutMs });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+async function overpassRound(query, { fetchImpl, signal, timeoutMs }) {
   let lastErr;
   for (const ep of OVERPASS_ENDPOINTS) {
     const ctrl = new AbortController();
@@ -160,14 +185,17 @@ async function overpassFetch(query, { fetchImpl, signal, timeoutMs }) {
 }
 
 /**
- * Hämtar OSM-element längs rutten.
+ * Hämtar OSM-element längs rutten. En del som inte går att hämta stoppar inte
+ * de andra; resultatet har statistik i .stats ({cells, cached, batches,
+ * failed, error, ms}). Fel kastas bara om ingenting alls gick att hämta.
  * cache = {get(key) → elements|null, set(key, elements)} (valfri, t.ex. localStorage)
  * onProgress(done, total) anropas efter varje hämtad del.
  */
 export async function fetchOsmAlongRoute(route, {
   fetchImpl = fetch, signal, cache = null, onProgress = () => {},
-  cellsPerRequest = 12, concurrency = 2, timeoutMs = 30000,
+  cellsPerRequest = 12, concurrency = 2, timeoutMs = 30000, waits,
 } = {}) {
+  const t0 = Date.now();
   const cells = routeCells(route);
   const elements = new Map();
   const missing = [];
@@ -181,11 +209,20 @@ export async function fetchOsmAlongRoute(route, {
   let done = 0;
   onProgress(done, batches.length);
 
-  let next = 0;
+  let next = 0, failed = 0, lastError = null;
   const worker = async () => {
     while (next < batches.length) {
       const batch = batches[next++];
-      const json = await overpassFetch(overpassQuery(batch), { fetchImpl, signal, timeoutMs });
+      let json;
+      try {
+        json = await overpassFetch(overpassQuery(batch), { fetchImpl, signal, timeoutMs, waits });
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        failed++;
+        lastError = e.message;
+        onProgress(++done, batches.length);
+        continue;
+      }
       const wanted = new Set(batch);
       const perCell = new Map(batch.map(k => [k, []]));
       for (const raw of json.elements || []) {
@@ -198,7 +235,17 @@ export async function fetchOsmAlongRoute(route, {
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
-  return [...elements.values()];
+  const out = [...elements.values()];
+  out.stats = {
+    cells: cells.length, cached: cells.length - missing.length,
+    batches: batches.length, failed, error: lastError, ms: Date.now() - t0,
+  };
+  if (batches.length && failed === batches.length && cells.length === missing.length) {
+    const e = new Error(lastError || 'Overpass gick inte att nå');
+    e.stats = out.stats;
+    throw e;
+  }
+  return out;
 }
 
 /** Rumsligt rutnät över vägsegment för snabb närmaste-sökning. */

@@ -21,6 +21,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 ## Kurvor och släpvagn
 
+- **Kurvradien** tas ur ruttens riktningsändring över ±20 m för tvära svängar (minst 30°), annars över ±50 m, så att hörn i den förenklade ruttlinjen inte blir falska kurvor. Kurvor med mindre än 150 m emellan slås ihop.
 - **Rekommenderad kurvfart** räknas ur kurvradien och vald sidokraft (standard 0,25 g; 1 g = 9,81 m/s²). Över 50 km/h sänks sidokraften gradvis till 65 % vid 110 km/h.
 - **Släpvagnsläge** (hemskärmen, ruttöversikten eller Inställningar): skyltad gräns men högst 80 km/h (inställbart, t.ex. 40 km/h för tung obromsad släpvagn), sidokraft 0,18 g i kurvor och en egen kalibrering. Utan rullprov med släpet uppskattas modellen från bilens värden.
 
@@ -29,6 +30,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Gyrot mäter bilens vridhastighet kring lodlinjen (oberoende av hur telefonen sitter); sidokraften är `a = v · ω` med farten från GPS.
 - Under kurvan visas en mätare med uppmätt mot planerad sidokraft. Var toppen mer än 15 % över planerat frågar appen efter kurvan, på rak väg: *Okej* eller *För mycket*. Obesvarade frågor finns i sammanfattningen.
 - Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar. Bil och släp lär sig var för sig.
+- Telefoner anger gyrots axlar, enheter och tecken olika. Appen lär sig därför vilken kombination av gyrots tre axlar som är "sväng" genom att jämföra med hur rutten svänger (minsta kvadrat, kräver några sekunders kurvkörning) och sparar den till nästa körning. Stötar över ca 70°/s ignoreras.
 - Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
 
 ## Körlogg (JSON)

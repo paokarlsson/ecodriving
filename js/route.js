@@ -1,5 +1,5 @@
 // Rutt: omsampling, lutning, kartmatchning och kurvfart.
-import { makeProjector, headingXY, circumradius, projectOnSegment } from './geo.js';
+import { makeProjector, headingXY, projectOnSegment } from './geo.js';
 
 export const STEP = 10; // meter mellan sampelpunkter
 
@@ -139,18 +139,46 @@ export function curveSpeedForRadius(R, base) {
   return v;
 }
 
+/** Riktningsändring (rad, utan tecken) mellan sträckan in mot i och ut från i, k sampel långa. */
+function turnAngle(route, i, k) {
+  const a = Math.max(0, i - k), c = Math.min(route.n - 1, i + k);
+  if (a === i || c === i) return 0;
+  const h1 = Math.atan2(route.Y[i] - route.Y[a], route.X[i] - route.X[a]);
+  const h2 = Math.atan2(route.Y[c] - route.Y[i], route.X[c] - route.X[i]);
+  let d = Math.abs(h2 - h1);
+  if (d > Math.PI) d = 2 * Math.PI - d;
+  return d;
+}
+
 /**
- * Rekommenderad kurvfart vid varje sampel. R tas ur tre punkter ±20 m bort.
+ * Kurvradie vid varje sampel. Ruttens linje är förenklad: en lång, mjuk
+ * kurva kan ritas som några få hörn på 3–8°. Radien från bara ±20 m gör
+ * ett sådant hörn till en skarp kurva. Därför:
+ *  - tvär sväng (minst 30° inom ±20 m, t.ex. korsning eller rondell):
+ *    radien från ±20 m,
+ *  - annars den största av radierna från ±20 m och ±50 m, så att ett
+ *    enstaka hörn sprids ut över den sträcka bilen har på sig.
+ * Radie = halva fönstret / riktningsändringen (cirkelbåge).
  */
-export function curveSpeeds(route, aLat) {
-  const k = Math.max(1, Math.round(20 / route.step));
-  const V = new Float64Array(route.n).fill(Infinity);
-  const Rs = new Float64Array(route.n).fill(Infinity);
-  for (let i = k; i < route.n - k; i++) {
-    const R = circumradius(route.X[i - k], route.Y[i - k], route.X[i], route.Y[i], route.X[i + k], route.Y[i + k]);
-    Rs[i] = R;
-    V[i] = curveSpeedForRadius(R, aLat);
+export function curveRadii(route) {
+  const k20 = Math.max(1, Math.round(20 / route.step));
+  const k50 = Math.max(k20 + 1, Math.round(50 / route.step));
+  const R = new Float64Array(route.n).fill(Infinity);
+  for (let i = 1; i < route.n - 1; i++) {
+    const t20 = turnAngle(route, i, k20);
+    const t50 = turnAngle(route, i, k50);
+    const r20 = t20 > 1e-6 ? (k20 * route.step) / t20 : Infinity;
+    const r50 = t50 > 1e-6 ? (k50 * route.step) / t50 : Infinity;
+    R[i] = t20 >= 30 * Math.PI / 180 ? r20 : Math.max(r20, r50);
   }
+  return R;
+}
+
+/** Rekommenderad kurvfart (m/s) vid varje sampel. */
+export function curveSpeeds(route, aLat) {
+  const Rs = curveRadii(route);
+  const V = new Float64Array(route.n).fill(Infinity);
+  for (let i = 0; i < route.n; i++) V[i] = curveSpeedForRadius(Rs[i], aLat);
   V.radius = Rs;
   return V;
 }
@@ -187,6 +215,23 @@ export function curveTargets(route, aLat, { limits = null, skipStart = 60, skipE
       }
       i = j + 1;
     } else i++;
+  }
+  return mergeCurves(out);
+}
+
+/**
+ * Kurvor med mindre än 150 m emellan blir en: en slingrig sträcka ger en
+ * signal före första kurvan med den lägsta farten, inte en kedja av sena
+ * signaler.
+ */
+export function mergeCurves(curves, gap = 150) {
+  const out = [];
+  for (const c of curves) {
+    const last = out[out.length - 1];
+    if (last && c.s - last.sEnd < gap) {
+      last.sEnd = Math.max(last.sEnd, c.sEnd);
+      if (c.v < last.v) { last.v = c.v; last.radius = c.radius; last.dir = c.dir; }
+    } else out.push({ ...c });
   }
   return out;
 }
