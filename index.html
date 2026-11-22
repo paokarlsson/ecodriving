@@ -232,7 +232,15 @@
       <h2 class="section-title">Kalibrering</h2>
       <div class="card">
         <p id="set-calib-show">Inte kalibrerad</p>
-        <button class="btn small" id="set-calib-redo">Gör om rullprovet</button>
+        <p id="set-coast-show" class="hint"></p>
+        <label class="field check">
+          <input type="checkbox" id="set-coast"> <span>Förfina av rullningar under körning</span>
+        </label>
+        <small class="hint">Varje gång du rullar med släppt gas mäter appen hur bilen saktar in och väger ihop det med rullprovet. Rullningar med broms, gas eller friläge sorteras bort.</small>
+        <div class="row" style="margin-top:10px">
+          <button class="btn small" id="set-calib-redo">Gör om rullprovet</button>
+          <button class="btn small ghost danger" id="set-coast-reset">Glöm inlärda rullningar</button>
+        </div>
       </div>
 
       <h2 class="section-title">Signaler</h2>

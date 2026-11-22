@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   trailerALat: 1.77,   // 0,18 g
   learnCurves: true,      // låt svar om kurvkraft justera sidokraften
   askCurvesInDrive: true, // fråga direkt efter kurvan (annars i sammanfattningen)
+  learnCoast: true,       // förfina rullmodellen av rullningar under körning
 });
 
 export const store = {
@@ -53,6 +54,9 @@ export const store = {
   /** Inlärd gyroaxel {axis: [x, y, z], r2, date}. */
   get gyroAxis() { return get('gyroAxis'); },
   set gyroAxis(v) { set('gyroAxis', v); },
+  /** Inlärda rullningar per profil: {car: CoastStats-JSON, trailer: …}. */
+  get coastLearn() { return get('coastLearn', {}); },
+  set coastLearn(v) { set('coastLearn', v); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

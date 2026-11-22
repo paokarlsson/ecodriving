@@ -1,7 +1,7 @@
 // Bromsfri körning – appens vyer och flöden.
 import { store, maskKey, DEFAULT_SETTINGS, osmCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
-import { buildRoute, headingAt, xyAt, curveTargets } from './route.js';
+import { buildRoute, headingAt, xyAt, curveTargets, gradeAt } from './route.js';
 import { fetchOsmAlongRoute, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
 import { DEFAULT_MODEL } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
@@ -10,6 +10,7 @@ import { demoData } from './demo.js';
 import { estimateTrailerModel, trailerLimits } from './trailer.js';
 import { LateralMeter, CurveTracker, learnALat, isStraightAt, routeYaw } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
+import { CoastLearner, CoastStats, acceptSegment } from './coastlearn.js';
 
 // Körloggar i telefonens lagring
 const safeStorage = {
@@ -350,10 +351,21 @@ $('calib-later').addEventListener('click', () => {
 const trailerOn = () => !!store.settings.trailer;
 /** Kalibrering för aktuellt läge (bil eller bil med släp), eller null. */
 function activeCalibration() { return trailerOn() ? store.calibrationTrailer : store.calibration; }
-function model() {
+/** Modell från rullprovet (eller typvärden / uppskattning för släp). */
+function baseModel() {
   if (trailerOn()) return store.calibrationTrailer || estimateTrailerModel(store.calibration || DEFAULT_MODEL);
   return store.calibration || DEFAULT_MODEL;
 }
+const coastKey = () => (trailerOn() ? 'trailer' : 'car');
+function coastStats() { return new CoastStats((store.coastLearn || {})[coastKey()] || {}); }
+/** Modellen som används: rullprovet förfinat av inlärda rullningar. */
+function model() {
+  const base = baseModel();
+  if (!store.settings.learnCoast) return base;
+  const fit = coastStats().fit(base);
+  return fit ? { ...base, A: fit.A, C: fit.C, coastSegments: fit.segments } : base;
+}
+const isCalibrated = () => !!(trailerOn() ? store.calibrationTrailer : store.calibration);
 /** Inställningar som påverkar fartmålen; med släp gäller släpets sidokraft och maxfart. */
 function planSettings() {
   const s = store.settings;
@@ -374,7 +386,7 @@ function enterHome() {
   $('home-calib').innerHTML =
     `<button class="chip ${tr ? 'on' : ''}" id="chip-trailer" aria-pressed="${tr}">${tr ? `Med släpvagn · max ${store.settings.trailerMaxKmh} km/h` : 'Utan släpvagn'}</button>` +
     (c
-      ? `<button class="chip ok" id="chip-calib">✓ ${tr ? 'Släp kalibrerat' : 'Kalibrerad'} · ${esc(describeModel(c))}</button>`
+      ? `<button class="chip ok" id="chip-calib">✓ ${tr ? 'Släp kalibrerat' : 'Kalibrerad'} · ${esc(describeModel(model()))}</button>`
       : `<button class="chip todo" id="chip-calib">${tr ? 'Släpet är inte kalibrerat – gör ett rullprov' : 'Inte kalibrerad – gör ett rullprov'}</button>`);
   $('chip-calib').addEventListener('click', () => show('calib'));
   $('chip-trailer').addEventListener('click', () => { setTrailer(!trailerOn()); enterHome(); });
@@ -627,6 +639,10 @@ function startDrive() {
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
   drive.askQueue = [];
+  drive.coast = new CoastLearner(model());
+  drive.coastFound = 0;
+  drive.coastUsed = 0;
+  drive.lastReleaseT = null;
   drive.log = new DriveLog({
     kind: 'drive',
     dest: plan.dest ? { name: plan.dest.name, lat: plan.dest.lat, lon: plan.dest.lon } : null,
@@ -675,21 +691,59 @@ function routeMeta(p) {
 }
 
 function modelSource() {
-  if (trailerOn()) return store.calibrationTrailer ? 'rullprov med släp' : 'uppskattad från bilen';
-  return store.calibration ? 'rullprov' : 'typvärden';
+  const base = trailerOn()
+    ? (store.calibrationTrailer ? 'rullprov med släp' : 'uppskattad från bilen')
+    : (store.calibration ? 'rullprov' : 'typvärden');
+  const n = store.settings.learnCoast ? coastStats().segments : 0;
+  return n ? `${base} + ${n} rullningar` : base;
 }
 
 function saveDriveLog(stats = null) {
   if (!drive.log) return;
+  // Resan slutar: en pågående rullning räknas med innan loggen avslutas
+  if (stats && drive.coast) {
+    const seg = drive.coast.cut('slut');
+    if (seg) handleCoastSegment(seg, drive.lastObs?.t ?? Date.now() / 1000);
+  }
   const m = drive.meter;
   if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, date: new Date().toISOString() };
   if (stats) drive.log.finish({
     ...stats, curves: (drive.curveLog || []).length,
     gyroAxis: m?.axis ? m.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
     gyroAxisR2: m?.axisR2 ?? null, gyroSign: m?.sign ?? null,
+    coastFound: drive.coastFound ?? 0, coastUsed: drive.coastUsed ?? 0,
+    modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
   logStore.save(drive.log);
   drive.logSavedAt = Date.now();
+}
+
+/** En rullning är klar: logga den, och lär av den om den är ren. */
+function handleCoastSegment(seg, t) {
+  if (seg.dur < 3) return; // inte värt att logga
+  drive.coastFound++;
+  let verdict = acceptSegment(seg, model(), { calibrated: isCalibrated() });
+  // Bara rullningar som börjar vid en släpp-signal räknas: då vet appen att
+  // gasen släpptes helt. Att bara lätta lite på gasen ser ut som en "lätt"
+  // rullning och skulle annars få modellen att tro att bilen rullar längre.
+  const r = drive.lastReleaseT;
+  const fromSignal = r != null && seg.startT >= r - 3 && seg.startT <= r + 8;
+  if (verdict.ok && !fromSignal) verdict = { ok: false, reason: 'började inte vid en släpp-signal', resid: verdict.resid };
+  const meanA = seg.points.length ? seg.points.reduce((a, p) => a + p.a, 0) / seg.points.length : null;
+  const learn = verdict.ok && store.settings.learnCoast && !plan.demo;
+  drive.log?.event(t, 'coast', {
+    s: seg.s, durS: seg.dur, fromKmh: seg.fromV * 3.6, toKmh: seg.toV * 3.6, end: seg.end,
+    points: seg.points.length, meanA, resid: verdict.resid ?? null,
+    accepted: verdict.ok, reason: verdict.reason ?? null, learned: learn, fromSignal,
+  });
+  if (!learn) return;
+  const st = coastStats();
+  st.add(seg.points);
+  store.coastLearn = { ...(store.coastLearn || {}), [coastKey()]: st.toJSON() };
+  drive.coastUsed++;
+  const m = model();
+  if (drive.engine) drive.engine.model = m;
+  drive.coast.setModel(m);
 }
 
 function stopDrive() {
@@ -703,6 +757,7 @@ function stopDrive() {
 function onDriveMotion(m) {
   if (!drive.meter) return;
   drive.meter.addMotion(m);
+  if (drive.coast && m.ax != null) drive.coast.addAccel(m.t, Math.hypot(m.ax, m.ay, m.az));
   sampleCurve(m.t);
 }
 
@@ -858,6 +913,15 @@ function onDriveObs(obs) {
   const arrived = events.some(e => e.type === 'arrived');
   if (!arrived) trackCurves(view, obs);
   logDrive(view, obs, events);
+  if (drive.coast && !arrived) {
+    const seg = drive.coast.addGps({
+      t: obs.t, v: obs.speed, s: view.s, acc: obs.accuracy,
+      grade: gradeAt(plan.route, view.s || 0),
+      // Utan höjddata går backen inte att räkna bort
+      ok: view.mode !== 'paused' && !view.paused && plan.route.hasEle,
+    });
+    if (seg) handleCoastSegment(seg, obs.t);
+  }
   for (const ev of events) handleDriveEvent(ev, obs);
   if (drive.engine) renderDrive(view, obs);
 }
@@ -896,6 +960,7 @@ function handleDriveEvent(ev, obs) {
       setTimeout(() => say(releaseMessage(ev)), 550);
       drive.flashUntil = Date.now() + 2500;
       drive.coastStart = { id: ev.target.id, dist: ev.target.s - drive.engine.s };
+      drive.lastReleaseT = obs.t;
       if (drive.sim) drive.sim.onRelease(ev.target);
       break;
     case 'pause':
@@ -1063,6 +1128,7 @@ function showSummary(st) {
     [mins != null ? `${mins} min` : '–', 'tid'],
     [st.late, 'sena signaler'],
     [st.brakeWarnings, 'backvarningar'],
+    [`${drive.coastUsed ?? 0} / ${drive.coastFound ?? 0}`, 'rullningar använda / mätta'],
   ].map(([b, s]) => `<div class="stat"><b>${esc(b)}</b><span>${esc(s)}</span></div>`).join('');
   renderCurveSummary();
   stack.length = 0;
@@ -1108,8 +1174,9 @@ function enterSettings() {
   $('set-key-change').textContent = k ? 'Byt' : 'Lägg till';
   const c = store.calibration;
   $('set-calib-show').textContent = c
-    ? `${describeModel(c)}. Kalibrerad ${new Date(c.date).toLocaleDateString('sv-SE')} (${c.runs} prov).`
+    ? `Rullprov ${new Date(c.date).toLocaleDateString('sv-SE')} (${c.runs} prov).`
     : 'Inte kalibrerad – typvärden används.';
+  renderCoastShow();
   const s = store.settings;
   bindRange('set-margin', 'marginS', v => `${v.toFixed(1).replace('.', ',')} s`, s);
   bindGForce(s, 'set-alat', 'aLat');
@@ -1255,6 +1322,28 @@ $('set-key-delete').addEventListener('click', () => {
   enterSettings();
 });
 $('set-calib-redo').addEventListener('click', () => show('calib'));
+
+function renderCoastShow() {
+  const m = model(), st = coastStats();
+  const fmt = x => x.toFixed(3).replace('.', ',');
+  const learned = store.settings.learnCoast && st.segments
+    ? ` Förfinad av ${st.segments} rullningar (${st.points} mätpunkter).`
+    : ' Inga inlärda rullningar ännu.';
+  $('set-coast-show').textContent = `${describeModel(m)}. A = ${fmt(m.A)} m/s², C = ${m.C.toFixed(5).replace('.', ',')} 1/m${trailerOn() ? ' (släp)' : ''}.${learned}`;
+  $('set-coast').checked = store.settings.learnCoast;
+}
+$('set-coast').addEventListener('change', e => { store.settings = { ...store.settings, learnCoast: e.target.checked }; renderCoastShow(); });
+$('set-coast-reset').addEventListener('click', e => {
+  const b = e.currentTarget;
+  if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Tryck igen för att glömma'; return; }
+  delete b.dataset.sure;
+  b.textContent = 'Glöm inlärda rullningar';
+  const all = { ...(store.coastLearn || {}) };
+  delete all[coastKey()];
+  store.coastLearn = all;
+  renderCoastShow();
+  toast('De inlärda rullningarna är borttagna. Rullprovet gäller.');
+});
 $('set-test-sound').addEventListener('click', () => {
   unlockAudio();
   sounds.release();

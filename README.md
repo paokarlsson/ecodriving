@@ -33,6 +33,12 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Telefoner anger gyrots axlar, enheter och tecken olika. Appen lär sig därför vilken kombination av gyrots tre axlar som är "sväng" genom att jämföra med hur rutten svänger (minsta kvadrat, kräver några sekunders kurvkörning) och sparar den till nästa körning. Stötar över ca 70°/s ignoreras.
 - Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
 
+## Rullmodellen lär sig under körning
+
+Varje rullning efter en släpp-signal blir ett litet rullprov. Appen hittar rullningen i GPS-farten, klipper bort början (foten lämnar gasen), slutet och allt efter gas (farten ökar) eller broms (inbromsning 0,8 m/s² mer än modellen två sekunder i rad, eller en ihållande stöt i accelerometern). Inbromsningen korrigeras för backen med ruttens höjddata.
+
+Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Rullningar som avviker mycket från modellen sorteras bort: lättare än väntat (troligen friläge) eller tyngre (broms). Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Bil och släp lär sig var för sig. Av/på och återställning under Inställningar → Kalibrering.
+
 ## Körlogg (JSON)
 
 Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställningar → Data → *Visa körloggar*, eller från sammanfattningen:
@@ -42,7 +48,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `trailer`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
 `samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
-Händelser: `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `answer`, `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
+Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `answer`, `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Utveckling
 
@@ -64,6 +70,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/sensors.js`, `js/audio.js`, `js/mapview.js` | Webbläsarens sensorer, ljud/röst, karta på canvas |
 | `js/app.js` | Vyer och flöden |
 | `js/logbook.js` | Körlogg som JSON och lagring av de senaste loggarna |
+| `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/trailer.js` | Släpvagnsläge: maxfart och uppskattad rullmodell |
 | `js/demo.js`, `js/sim.js` | Syntetisk demorutt och simulerad bil |
