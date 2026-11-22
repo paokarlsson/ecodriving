@@ -232,11 +232,14 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .gm-big { font-size: 1.4rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--fg); }
 /* Skalan: grönt = upp till planerat, gult = upp till 150 %, rött längst ut.
    Bollen: mitten = rakt fram, ut åt det håll kraften trycker föraren. */
-.gm-track { position: relative; height: 30px; border-radius: 15px; overflow: hidden; display: flex; }
-.gm-track .seg { height: 100%; }
-.gm-track .seg.r { width: 12.5%; background: #e5484d; }
-.gm-track .seg.y { width: 12.5%; background: #f2c230; }
-.gm-track .seg.g { width: 50%; background: #2fb36d; }
+.gm-track {
+  position: relative; height: 30px; border-radius: 15px; overflow: hidden;
+  /* Mjuk gradient. Övergångarna ligger centrerade på zongränserna:
+     150 % av planerat vid 12,5 % / 87,5 % och 100 % vid 25 % / 75 %. */
+  background: linear-gradient(90deg,
+    #e5484d 0%, #e5484d 8%, #f2c230 17%, #f2c230 21%, #2fb36d 30%,
+    #2fb36d 70%, #f2c230 79%, #f2c230 83%, #e5484d 92%, #e5484d 100%);
+}
 .gm-center { position: absolute; top: 5px; bottom: 5px; left: 50%; width: 2px; margin-left: -1px; background: rgba(0,0,0,0.35); }
 .gm-ball {
   position: absolute; top: 3px; width: 24px; height: 24px; margin-left: -12px; left: 50%;
