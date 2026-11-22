@@ -177,10 +177,13 @@
       </div>
     </div>
     <div class="drive-target" id="d-target"></div>
-    <div class="gmeter" id="d-gmeter" hidden>
-      <div class="gm-row"><span>Sidokraft nu</span><span id="d-gplan">planerat 0,25 g</span></div>
-      <div class="gm-big" id="d-gnow">0,00 g</div>
-      <div class="gm-bar"><i id="d-gbar"></i><b id="d-gmark"></b></div>
+    <div class="gmeter" id="d-gmeter" aria-label="Sidokraft">
+      <div class="gm-row"><span class="gm-big" id="d-gnow">0,00 g</span><span id="d-gplan">rakt fram</span></div>
+      <div class="gm-track">
+        <span class="gm-zone" id="d-gzone"></span>
+        <span class="gm-center"></span>
+        <span class="gm-ball" id="d-gball"></span>
+      </div>
     </div>
     <div class="ask-card" id="d-ask" hidden role="dialog" aria-labelledby="d-ask-q">
       <div class="ask-q" id="d-ask-q">Kurvan tog 0,31 g. Var det okej?</div>

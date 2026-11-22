@@ -552,12 +552,12 @@ function startDrive() {
   drive.curveLog = [];
   drive.askQueue = [];
   hideAsk();
-  $('d-gmeter').hidden = true;
   show('drive');
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
   drive.stops.push(keepAwake());
   if (plan.demo) {
     drive.sim = new SimCar(plan.route, plan.limits, model());
+    drive.meter.defaultSign = 1; // simulerat gyro har redan höger positiv
     drive.simTimer = setInterval(() => {
       const obs = drive.sim.step(1, plan.targets);
       // Simulerat gyro: bilens vridhastighet ur ruttens form
@@ -592,26 +592,38 @@ function onDriveMotion(m) {
 
 let gmeterAt = 0;
 function sampleCurve(t) {
-  if (!drive.tracker || !drive.tracker.inside()) return;
-  const c = drive.meter.current();
-  drive.tracker.sample(t, c.a, drive.meter.v, c.yaw);
+  if (!drive.meter) return;
+  // Lär gyrots tecken av rutten (vilket håll som är höger på just den här telefonen)
+  if (drive.engine && plan) drive.meter.learnSign(routeYaw(plan.route, drive.engine.s, drive.meter.v));
+  if (drive.tracker && drive.tracker.inside()) {
+    const c = drive.meter.current();
+    drive.tracker.sample(t, c.a, drive.meter.v, c.yaw);
+  }
   const now = performance.now();
   if (now - gmeterAt > 150) { gmeterAt = now; renderGMeter(); }
 }
 
+/**
+ * Sidokraftsbollen: i mitten rakt fram, åt höger i vänstersväng och tvärtom
+ * (dit kraften trycker föraren). Det gröna bandet är planerad sidokraft.
+ */
 function renderGMeter() {
   const el = $('d-gmeter');
+  if (!drive.meter) return;
   const tr = drive.tracker;
-  if (!tr || !tr.inside()) { el.hidden = true; return; }
-  const curve = tr.active.curve;
-  const planned = (curve.v * curve.v) / curve.radius / 9.81;
-  const g = drive.meter.current().g;
-  el.hidden = false;
+  const inCurve = tr && tr.inside();
+  const planned = inCurve
+    ? (tr.active.curve.v ** 2) / tr.active.curve.radius / 9.81
+    : planSettings().aLat / 9.81;
+  const { g, side } = drive.meter.current();
+  const range = Math.max(0.5, planned * 1.4);            // ± fullt utslag i g
+  const pos = 50 + Math.max(-1, Math.min(1, side / range)) * 46;
+  $('d-gball').style.left = `${pos}%`;
+  $('d-gzone').style.width = `${Math.min(100, (planned / range) * 100)}%`;
   $('d-gnow').textContent = fmtG(g);
-  $('d-gplan').textContent = `planerat ${fmtG(planned)}`;
-  const scale = Math.max(0.5, planned * 1.6);
-  $('d-gbar').style.width = `${Math.min(100, (g / scale) * 100)}%`;
-  $('d-gmark').style.left = `${(planned / scale) * 100}%`;
+  $('d-gplan').textContent = inCurve
+    ? `planerat ${fmtG(planned)}`
+    : (g < 0.03 ? 'rakt fram' : `komfort ${fmtG(planned)}`);
   el.classList.toggle('over', g > planned * 1.15);
 }
 

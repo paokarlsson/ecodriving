@@ -98,3 +98,25 @@ test('raksträcka känns igen', () => {
   assert.equal(isStraightAt(r, 500), true);
   assert.equal(isStraightAt(r, 1420), false);
 });
+
+test('bollen: vänstersväng trycker åt höger, tecknet lärs av rutten', () => {
+  // Android-gyro: positiv rotation = vänster. Rutten säger vänstersväng (negativ högerrate).
+  const m = new LateralMeter();
+  m.setSpeed(15);
+  for (let i = 0; i < 100; i++) {
+    m.addYaw(i * 0.02, 0.2, 0.02);      // gyrot: +0,2 rad/s
+    m.learnSign(-0.2);                   // rutten: vänster
+  }
+  assert.equal(m.sign, -1);
+  assert.ok(m.current().side > 0.2, `side ${m.current().side}`); // kraft åt höger
+  // iPhone-liknande omvänt tecken: samma vänstersväng, gyrot säger -0,2
+  const i = new LateralMeter();
+  i.setSpeed(15);
+  for (let k = 0; k < 100; k++) { i.addYaw(k * 0.02, -0.2, 0.02); i.learnSign(-0.2); }
+  assert.equal(i.sign, 1);
+  assert.ok(i.current().side > 0.2);
+  // Rakt fram: mitten
+  const r = new LateralMeter();
+  r.setSpeed(20);
+  assert.equal(Math.abs(r.current().side), 0);
+});

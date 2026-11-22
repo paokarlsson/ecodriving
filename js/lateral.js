@@ -42,6 +42,26 @@ export class LateralMeter {
     this.turn = 0;         // integrerad svängvinkel (rad)
     this.v = 0;
     this.straight = false; // sätts av appen ur rutten (rak väg eller stillastående)
+    // Gyrots tecken skiljer mellan plattformar. Det lärs in genom att jämföra
+    // med rutten: positiv "högersväng" = medurs sett ovanifrån.
+    this.sign = null;
+    this.signAcc = 0;
+    this.defaultSign = -1; // Android: positiv rotation kring "upp" = vänster
+  }
+
+  /**
+   * Jämför gyrot med förväntad sväng ur rutten (rad/s, höger positiv).
+   * Efter några tydliga kurvsampel vet mätaren vilket håll som är höger.
+   */
+  learnSign(expectedRight) {
+    if (Math.abs(expectedRight) < 0.03 || Math.abs(this.yaw) < 0.02) return;
+    this.signAcc = Math.max(-1, Math.min(1, this.signAcc + expectedRight * this.yaw));
+    if (Math.abs(this.signAcc) > 0.05) this.sign = Math.sign(this.signAcc);
+  }
+
+  /** Vridhastighet med höger sväng positiv (rad/s). */
+  rightYaw() {
+    return this.yaw * (this.sign ?? this.defaultSign);
   }
 
   setSpeed(v) { this.v = Math.max(0, v || 0); }
@@ -80,10 +100,14 @@ export class LateralMeter {
     return d;
   }
 
-  /** Sidokraft just nu: a = v · |ω|. */
+  /**
+   * Sidokraft just nu: a = v · |ω|. side = kraften som föraren känner,
+   * positiv åt höger (vänstersväng trycker åt höger), i g.
+   */
   current() {
     const a = this.v * Math.abs(this.yaw);
-    return { a, g: a / G, yaw: this.yaw };
+    const side = -(this.v * this.rightYaw()) / G;
+    return { a, g: a / G, yaw: this.yaw, side };
   }
 }
 
