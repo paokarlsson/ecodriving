@@ -81,7 +81,9 @@ function nextOnboardingStep(from) {
   if (!onboarding) { back(); return; }
   const order = ['welcome', 'key', 'perms', 'calib', 'home'];
   const i = order.indexOf(from);
-  const next = order[i + 1] || 'home';
+  let next = order[i + 1] || 'home';
+  // Nyckeln kom redan med länken: hoppa över nyckelsteget
+  if (next === 'key' && store.key) next = 'perms';
   if (next === 'home') {
     onboarding = false;
     store.onboarded = true;
@@ -1242,6 +1244,8 @@ $('sum-done').addEventListener('click', () => { stack.length = 0; show('home'); 
 function enterSettings() {
   const k = store.key;
   $('set-key-show').textContent = k ? `Nyckel: ${maskKey(k)}` : 'Ingen nyckel – rutter fungerar inte.';
+  $('set-share').hidden = !k;
+  $('set-share-link').hidden = true;
   $('set-key-delete').hidden = !k;
   $('set-key-change').textContent = k ? 'Byt' : 'Lägg till';
   const c = store.calibration;
@@ -1387,6 +1391,35 @@ $('set-tcalib-redo').addEventListener('click', () => {
   if (!trailerOn()) setTrailer(true);
   show('calib');
 });
+/** Länk till appen med nyckeln som parameter: ?key=… */
+function shareLinkWithKey() {
+  const url = new URL(location.href);
+  url.hash = '';
+  url.search = '';
+  url.searchParams.set('key', store.key);
+  return url.toString();
+}
+$('set-key-share').addEventListener('click', async () => {
+  if (!store.key) return;
+  const link = shareLinkWithKey();
+  const field = $('set-share-link');
+  field.value = link;
+  field.hidden = false;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Bromsfri körning', text: 'Appen som säger när du ska släppa gasen. Öppna länken så följer min nyckel med:', url: link });
+      return;
+    }
+    await navigator.clipboard.writeText(link);
+    toast('Länken är kopierad.');
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    field.focus();
+    field.select();
+    toast('Markera länken och kopiera den.');
+  }
+});
+
 $('set-key-change').addEventListener('click', () => show('key'));
 $('set-key-delete').addEventListener('click', () => {
   if (!confirm('Radera API-nyckeln från telefonen?')) return;
@@ -1430,6 +1463,34 @@ $('set-reset').addEventListener('click', () => {
 });
 
 // ---------- Start ----------
+/**
+ * Nyckel i länken (?key=… eller #key=…), t.ex. från en vän som delat appen.
+ * Den sparas i telefonen och tas sedan bort ur adressfältet, så att den inte
+ * ligger kvar i historiken eller syns om man delar skärmen.
+ */
+function takeKeyFromUrl() {
+  let key = null;
+  try {
+    const url = new URL(location.href);
+    const fromQuery = url.searchParams.get('key');
+    const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
+    const fromHash = hash.get('key');
+    key = (fromQuery || fromHash || '').trim() || null;
+    if (!key) return;
+    url.searchParams.delete('key');
+    hash.delete('key');
+    const rest = hash.toString();
+    history.replaceState(null, '', url.pathname + url.search + (rest ? '#' + rest : ''));
+  } catch { return; }
+  if (key === store.key) return;
+  const had = !!store.key;
+  store.key = key;
+  store.keySkipped = false;
+  // Toasten visas när första vyn är på plats
+  setTimeout(() => toast(had ? 'Nyckeln från länken har ersatt den tidigare.' : 'Nyckeln från länken är sparad i telefonen.'), 300);
+}
+takeKeyFromUrl();
+
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

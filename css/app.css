@@ -255,6 +255,8 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .log-title { font-weight: 700; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .log-meta { color: var(--muted); font-size: 0.88rem; width: 100%; font-variant-numeric: tabular-nums; }
 .log-btns { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.share-link { width: 100%; margin-top: 8px; font: 13px/1.4 ui-monospace, Menlo, monospace; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+#set-share { display: grid; gap: 6px; margin-top: 12px; }
 .json-box { width: 100%; min-height: 160px; font: 12px/1.4 ui-monospace, Menlo, monospace; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 8px; }
 @media (prefers-reduced-motion: reduce) { .gm-ball { transition: none; } }
 .ask-card {
