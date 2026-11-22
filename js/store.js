@@ -44,6 +44,12 @@ export const store = {
   /** De senaste svaren om kurvkraft (högst 200). */
   get curveAnswers() { return get('curveAnswers', []); },
   set curveAnswers(v) { set('curveAnswers', (v || []).slice(-200)); },
+  /** Pågående resa, så att den överlever en omladdning: {dest, demo, stage, at}. */
+  get lastTrip() { return get('lastTrip'); },
+  set lastTrip(v) { set('lastTrip', v); },
+  /** De senaste resmålen (högst 5). */
+  get recents() { return get('recents', []); },
+  set recents(v) { set('recents', (v || []).slice(0, 5)); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

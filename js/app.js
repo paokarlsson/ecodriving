@@ -34,6 +34,8 @@ const stack = [];
 let onboarding = false;
 
 function show(id, { replace = false } = {}) {
+  // Tillbaka på hemskärmen = ingen pågående resa att återställa vid omladdning
+  if (id === 'home') setTripStage(null);
   document.querySelectorAll('.screen').forEach(s => { s.hidden = s.id !== id; });
   if (replace && stack.length) stack[stack.length - 1] = id;
   else if (stack[stack.length - 1] !== id) stack.push(id);
@@ -46,6 +48,7 @@ function back() {
     const leaving = stack.pop();
     if (leaving === 'calib') stopCalibration();
     const id = stack[stack.length - 1];
+    if (id === 'home') setTripStage(null);
     document.querySelectorAll('.screen').forEach(s => { s.hidden = s.id !== id; });
     const enter = screens[id];
     if (enter) enter();
@@ -383,6 +386,7 @@ $('search-form').addEventListener('submit', async e => {
 });
 
 function renderFavorites() {
+  renderRecents();
   const favs = store.favorites;
   $('fav-title').hidden = !favs.length || !store.key;
   const ul = $('favorites');
@@ -442,7 +446,37 @@ async function prepare(coords, elements = null, onStep = () => {}) {
   return computeTargets({ route, elements, rawLimits, coverage, warnings });
 }
 
+// ---------- Resmål som överlever omladdning ----------
+const TRIP_MAX_AGE = 12 * 3600 * 1000;
+
+function rememberTrip(dest, demo = false) {
+  store.lastTrip = { dest: dest ? { name: dest.name, lat: dest.lat, lon: dest.lon } : null, demo, stage: 'overview', at: Date.now() };
+  if (dest && !demo) {
+    store.recents = [{ name: dest.name, lat: dest.lat, lon: dest.lon }, ...store.recents.filter(r => r.name !== dest.name)];
+  }
+}
+
+function setTripStage(stage) {
+  const t = store.lastTrip;
+  if (t && t.stage !== stage) store.lastTrip = { ...t, stage, at: Date.now() };
+}
+
+function renderRecents() {
+  const favNames = new Set(store.favorites.map(f => f.name));
+  const list = store.key ? store.recents.filter(r => !favNames.has(r.name)) : [];
+  $('recent-title').hidden = !list.length;
+  const ul = $('recents');
+  ul.innerHTML = '';
+  for (const r of list) {
+    const li = document.createElement('li');
+    li.innerHTML = `<button class="pick">${esc(r.name)}</button>`;
+    li.querySelector('.pick').addEventListener('click', () => planRoute(r));
+    ul.appendChild(li);
+  }
+}
+
 async function planRoute(dest) {
+  rememberTrip(dest);
   show('overview');
   $('ov-title').textContent = dest.name;
   const step = text => { $('ov-summary').innerHTML = `<span><span class="spinner"></span>${esc(text)}</span>`; };
@@ -468,6 +502,7 @@ async function planRoute(dest) {
 
 async function planDemo() {
   const d = demoData();
+  rememberTrip(null, true);
   show('overview');
   const p = await prepare(d.coords, d.elements);
   plan = { dest: { name: d.name }, ...p, duration: null, demo: true };
@@ -541,6 +576,7 @@ $('ov-start').addEventListener('click', () => startDrive());
 
 function startDrive() {
   if (!plan) return;
+  setTripStage('driving');
   unlockAudio();
   if (needsMotionPermission()) requestMotionPermission();
   const s = store.settings;
@@ -1034,7 +1070,15 @@ if (!store.safetyAck || !store.onboarded) {
   onboarding = true;
   show(store.safetyAck ? (store.key || store.keySkipped ? 'perms' : 'key') : 'welcome');
 } else {
+  // Resa som pågick när sidan laddades om: hämta samma rutt igen
+  const trip = store.lastTrip;
   show('home');
+  if (trip && trip.stage && Date.now() - trip.at < TRIP_MAX_AGE) {
+    const wasDriving = trip.stage === 'driving';
+    if (trip.demo) planDemo();
+    else if (trip.dest && store.key) planRoute(trip.dest);
+    if (wasDriving) toast('Sidan laddades om. Rutten är hämtad igen – tryck Starta för att fortsätta.', false, 7000);
+  }
 }
 
 // Gör det lättare att felsöka i konsolen.
