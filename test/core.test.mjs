@@ -209,3 +209,20 @@ test('körmotor pausar vid dålig GPS och utanför rutten', () => {
 test('decel är positiv på plan väg', () => {
   assert.ok(decel(20, 0, DEFAULT_MODEL) > 0);
 });
+
+import { curveSpeedForRadius, comfortLatAccel } from '../js/route.js';
+
+test('rekommenderad kurvfart: lagom sidokraft, mindre i hög fart', () => {
+  const g = 9.81, base = 0.25 * g;
+  const v35 = curveSpeedForRadius(35, base) * 3.6;
+  assert.ok(v35 > 30 && v35 < 36, `R=35: ${v35}`);
+  const v400 = curveSpeedForRadius(400, base);
+  const aUsed = v400 * v400 / 400;
+  assert.ok(Math.abs(aUsed - comfortLatAccel(v400, base)) < 0.01, 'självkonsistent');
+  assert.ok(aUsed < base, 'mindre sidokraft i hög fart');
+  assert.equal(curveSpeedForRadius(Infinity, base), Infinity);
+  const { coords } = demoData();
+  const c = curveTargets(buildRoute(coords), base)[0];
+  assert.ok(c.sEnd > c.s && c.radius > 25 && c.radius < 50, JSON.stringify(c));
+  assert.equal(c.dir, 'right');
+});

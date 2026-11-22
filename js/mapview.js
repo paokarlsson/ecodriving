@@ -45,7 +45,7 @@ export function drawOverview(canvas, route, targets) {
 }
 
 /** Körkarta runt bilen, vriden så att färdriktningen pekar uppåt. */
-export function drawDrive(canvas, route, targets, s, headingDeg, viewMeters = 650) {
+export function drawDrive(canvas, route, targets, s, headingDeg, { limits = null, curves = null, viewMeters = 650 } = {}) {
   const { g, w, h } = setup(canvas);
   const i = Math.min(route.n - 1, Math.max(0, Math.round(s / route.step)));
   const cx = route.X[i], cy = route.Y[i];
@@ -59,10 +59,26 @@ export function drawDrive(canvas, route, targets, s, headingDeg, viewMeters = 65
     return [px + rx * sc, py - ry * sc];
   };
   const back = Math.max(0, i - Math.round(200 / route.step));
-  const ahead = Math.min(route.n - 1, i + Math.round(viewMeters * 1.2 / route.step));
+  const end = Math.min(route.n - 1, i + Math.round(viewMeters * 1.2 / route.step));
   drawRoute(g, route, P, back, i, css('--route-done', '#a0aec0'), 9);
-  drawRoute(g, route, P, i, ahead, css('--route', '#4a5568'), 9);
+  drawRoute(g, route, P, i, end, css('--route', '#4a5568'), 9);
   drawTargets(g, route, targets.filter(t => t.s >= s && t.s - s < viewMeters * 1.2), P);
+  const ahead = t => t >= s - 20 && t - s < viewMeters;
+  // Rekommenderad kurvfart som skylt vid kurvans början
+  for (const c of curves || []) {
+    if (!ahead(c.s)) continue;
+    const [x, y] = P(...xyAtIndex(route, c.s));
+    curveSign(g, x + 16, y - 16, Math.round(c.v * 3.6));
+  }
+  // Hastighetsgräns där den ändras framför bilen
+  if (limits) {
+    for (let k = Math.max(1, i); k <= Math.min(route.n - 1, i + Math.round(viewMeters / route.step)); k++) {
+      if (limits[k] != null && limits[k] !== limits[k - 1]) {
+        const [x, y] = P(route.X[k], route.Y[k]);
+        limitSign(g, x - 18, y - 14, limits[k]);
+      }
+    }
+  }
   // Bilen
   g.save();
   g.translate(px, py);
@@ -106,4 +122,40 @@ function dot(g, x, y, r, fill, stroke) {
   g.lineWidth = 2;
   g.strokeStyle = stroke;
   g.stroke();
+}
+
+function xyAtIndex(route, s) {
+  const k = Math.min(route.n - 1, Math.max(0, Math.round(s / route.step)));
+  return [route.X[k], route.Y[k]];
+}
+
+function limitSign(g, x, y, kmh) {
+  g.beginPath();
+  g.arc(x, y, 14, 0, Math.PI * 2);
+  g.fillStyle = '#fff';
+  g.fill();
+  g.lineWidth = 4;
+  g.strokeStyle = '#d0021b';
+  g.stroke();
+  g.fillStyle = '#111';
+  g.font = '800 12px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(String(kmh), x, y + 0.5);
+}
+
+function curveSign(g, x, y, kmh) {
+  const w = 30, h = 22;
+  g.fillStyle = '#f7c600';
+  g.strokeStyle = '#111';
+  g.lineWidth = 1.5;
+  g.beginPath();
+  g.roundRect ? g.roundRect(x - w / 2, y - h / 2, w, h, 4) : g.rect(x - w / 2, y - h / 2, w, h);
+  g.fill();
+  g.stroke();
+  g.fillStyle = '#111';
+  g.font = '800 12px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(String(kmh), x, y + 0.5);
 }

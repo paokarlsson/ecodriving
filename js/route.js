@@ -120,33 +120,59 @@ export function matchToRoute(route, lat, lon, sHint = null, { back = 80, ahead =
 }
 
 /**
- * Hastighet som kurvan tillåter vid varje sampel: v = √(a_lat · R),
- * där R tas ur tre punkter ±20 m bort.
+ * Lagom sidoacceleration (m/s²) vid farten v. Vid låg fart accepteras mer
+ * sidokraft än vid hög; base gäller upp till 50 km/h och sjunker sedan
+ * linjärt till 65 % av base vid 110 km/h (jfr vägutformningens friktionstal).
+ */
+export function comfortLatAccel(v, base) {
+  const kmh = v * 3.6;
+  if (kmh <= 50) return base;
+  const f = 1 - 0.35 * Math.min(1, (kmh - 50) / 60);
+  return base * f;
+}
+
+/** Rekommenderad fart (m/s) i en kurva med radien R (m): löser v = √(a_lat(v) · R). */
+export function curveSpeedForRadius(R, base) {
+  if (!Number.isFinite(R)) return Infinity;
+  let v = Math.sqrt(base * R);
+  for (let k = 0; k < 8; k++) v = Math.sqrt(comfortLatAccel(v, base) * R);
+  return v;
+}
+
+/**
+ * Rekommenderad kurvfart vid varje sampel. R tas ur tre punkter ±20 m bort.
  */
 export function curveSpeeds(route, aLat) {
   const k = Math.max(1, Math.round(20 / route.step));
   const V = new Float64Array(route.n).fill(Infinity);
+  const Rs = new Float64Array(route.n).fill(Infinity);
   for (let i = k; i < route.n - k; i++) {
     const R = circumradius(route.X[i - k], route.Y[i - k], route.X[i], route.Y[i], route.X[i + k], route.Y[i + k]);
-    V[i] = Math.sqrt(aLat * R);
+    Rs[i] = R;
+    V[i] = curveSpeedForRadius(R, aLat);
   }
+  V.radius = Rs;
   return V;
 }
 
 /**
- * Kurvor som fartmål. En kurva är ett sammanhängande parti där kurvfarten
- * understiger maxV. Målet läggs där kurvfarten först närmar sig kurvans
- * lägsta fart, så att bilen har rätt fart vid insläppet.
+ * Kurvor där rekommenderad fart understiger gränsen (minus 5 km/h), eller
+ * 100 km/h där gränsen är okänd. Målet läggs där kurvfarten först närmar sig
+ * kurvans lägsta fart, så att bilen har rätt fart vid insläppet.
+ * Varje kurva: {s, sEnd, v (m/s), radius (m), kind: 'curve'}.
  */
-export function curveTargets(route, aLat, { maxV = 90 / 3.6, limits = null, skipStart = 60, skipEnd = 30 } = {}) {
+export function curveTargets(route, aLat, { limits = null, skipStart = 60, skipEnd = 30 } = {}) {
   const V = curveSpeeds(route, aLat);
+  const cap = i => {
+    const lim = limits && limits[i] != null && Number.isFinite(limits[i]) ? limits[i] : 105;
+    return (lim - 5) / 3.6;
+  };
   const out = [];
   let i = 0;
   while (i < route.n) {
-    const lim = limits && Number.isFinite(limits[i]) ? limits[i] / 3.6 : Infinity;
-    if (V[i] < Math.min(maxV, lim - 5 / 3.6)) {
+    if (V[i] < cap(i)) {
       let j = i, vmin = V[i], imin = i;
-      while (j < route.n && V[j] < Math.min(maxV, (limits && Number.isFinite(limits[j]) ? limits[j] / 3.6 : Infinity) - 5 / 3.6)) {
+      while (j < route.n && V[j] < cap(j)) {
         if (V[j] < vmin) { vmin = V[j]; imin = j; }
         j++;
       }
@@ -154,10 +180,21 @@ export function curveTargets(route, aLat, { maxV = 90 / 3.6, limits = null, skip
       for (let q = i; q <= imin; q++) { if (V[q] <= vmin * 1.15) { entry = q; break; } }
       const s = route.S[entry];
       if (s > skipStart && s < route.length - skipEnd) {
-        out.push({ s, v: vmin, kind: 'curve', label: 'kurva' });
+        out.push({
+          s, sEnd: route.S[Math.min(route.n - 1, j - 1)], v: vmin,
+          radius: V.radius[imin], kind: 'curve', label: 'kurva', dir: curveDir(route, imin),
+        });
       }
       i = j + 1;
     } else i++;
   }
   return out;
+}
+
+/** 'right' eller 'left' för kurvan vid sampel i (tecknet på kryssprodukten). */
+function curveDir(route, i) {
+  const k = Math.max(1, Math.round(20 / route.step));
+  const a = Math.max(0, i - k), c = Math.min(route.n - 1, i + k);
+  const cross = (route.X[i] - route.X[a]) * (route.Y[c] - route.Y[i]) - (route.Y[i] - route.Y[a]) * (route.X[c] - route.X[i]);
+  return cross < 0 ? 'right' : 'left';
 }

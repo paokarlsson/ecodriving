@@ -1,7 +1,7 @@
 // Bromsfri körning – appens vyer och flöden.
 import { store, maskKey, DEFAULT_SETTINGS, osmCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
-import { buildRoute, headingAt, xyAt } from './route.js';
+import { buildRoute, headingAt, xyAt, curveTargets } from './route.js';
 import { fetchOsmAlongRoute, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
 import { DEFAULT_MODEL } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
@@ -401,7 +401,8 @@ async function prepare(coords, elements = null, onStep = () => {}) {
   const s = store.settings;
   const limits = assignLimits(route, elements);
   const targets = buildTargets(route, elements, limits, s);
-  return { route, limits, targets, warnings };
+  const curves = curveTargets(route, s.aLat, { limits });
+  return { route, limits, targets, curves, warnings };
 }
 
 async function planRoute(dest) {
@@ -448,7 +449,7 @@ function renderOverview() {
   const c = countKinds(targets);
   const order = ['traffic_signals', 'roundabout', 'curve', 'limit', 'give_way', 'stop'];
   $('ov-counts').innerHTML = order.filter(k => c[k]).map(k =>
-    `<li><i style="background:${KIND_COLOR[k]}"></i>${c[k]} ${esc(c[k] > 1 ? PLURAL[k] : kindLabel(k))}</li>`).join('');
+    `<li><i style="background:${KIND_COLOR[k]}"></i>${c[k]} ${esc(c[k] > 1 ? PLURAL[k] : kindLabel(k))}${esc(legendExtra(k))}</li>`).join('');
   const w = [...(warnings || [])];
   if (!store.calibration) w.push('Bilen är inte kalibrerad – typvärden används. Gör ett rullprov för bättre precision.');
   if (plan.demo) w.push('Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
@@ -458,6 +459,17 @@ function renderOverview() {
   $('ov-fav').hidden = plan.demo || store.favorites.some(f => f.name === dest.name);
   requestAnimationFrame(() => drawOverview($('ov-map'), route, targets));
 }
+function legendExtra(k) {
+  if (k === 'curve' && plan.curves && plan.curves.length) {
+    return ` (lägst ${kmh(Math.min(...plan.curves.map(c => c.v)))} km/h)`;
+  }
+  if (k === 'limit') {
+    const known = plan.limits.filter(x => x != null);
+    if (known.length) return ` (${Math.min(...known)}–${Math.max(...known)} km/h)`;
+  }
+  return '';
+}
+
 const PLURAL = {
   traffic_signals: 'trafikljus', roundabout: 'rondeller', curve: 'kurvor',
   limit: 'sänkta gränser', give_way: 'väjningsplikter', stop: 'stopplikter',
@@ -614,12 +626,40 @@ function renderDrive(view, obs = null) {
       break;
   }
   $('d-target').textContent = target;
+  renderSigns(view);
   if (plan) {
     const s = view.s || 0;
     const moving = (view.v || 0) > 3;
     const heading = moving || drive.compass == null ? smoothHeading(plan.route, s) : drive.compass;
-    drawDrive($('d-map'), plan.route, plan.targets, s, heading);
+    drawDrive($('d-map'), plan.route, plan.targets, s, heading, { limits: plan.limits, curves: plan.curves });
   }
+}
+
+/** Hastighetsgräns och rekommenderad kurvfart vid bilens läge. */
+function renderSigns(view) {
+  if (!plan) return;
+  const s = view.s || 0;
+  const vk = (view.v || 0) * 3.6;
+  const i = Math.min(plan.route.n - 1, Math.max(0, Math.round(s / plan.route.step)));
+  const limit = plan.limits[i];
+  const lim = $('d-limit');
+  lim.hidden = limit == null;
+  if (limit != null) lim.textContent = limit;
+
+  // Kurva vi är i, eller nästa inom 300 m
+  const cur = (plan.curves || []).find(c => s >= c.s - 300 && s <= c.sEnd + 10);
+  const cs = $('d-curve');
+  cs.hidden = !cur;
+  let rec = limit;
+  if (cur) {
+    const ck = kmh(cur.v);
+    const inside = s >= cur.s;
+    cs.querySelector('b').textContent = ck;
+    cs.classList.toggle('left', cur.dir === 'left');
+    cs.querySelector('small').textContent = inside ? 'i kurvan' : `om ${fmtDist(cur.s - s)}`;
+    if (inside) rec = rec == null ? ck : Math.min(rec, ck);
+  }
+  $('d-speed').parentElement.classList.toggle('over', rec != null && vk > rec + 3);
 }
 
 /** Kurs längs rutten över de närmaste ca 50 m – lugnare än enskilda segment. */
@@ -684,11 +724,25 @@ function enterSettings() {
     : 'Inte kalibrerad – typvärden används.';
   const s = store.settings;
   bindRange('set-margin', 'marginS', v => `${v.toFixed(1).replace('.', ',')} s`, s);
-  bindRange('set-alat', 'aLat', v => `${v.toFixed(1).replace('.', ',')} m/s²`, s);
+  bindGForce(s);
   bindRange('set-giveway', 'giveWayKmh', v => `${v} km/h`, s);
   bindRange('set-rb', 'roundaboutKmh', v => `${v} km/h`, s);
   $('set-voice').checked = s.voice;
 }
+/** Komfort i kurvor visas i g men sparas som m/s². */
+function bindGForce(s) {
+  const input = $('set-alat'), out = $('set-alat-out');
+  const label = g => `${g.toFixed(2).replace('.', ',')} g · ${g < 0.2 ? 'mjukt' : g <= 0.28 ? 'lagom' : 'sportigt'}`;
+  const g0 = s.aLat / 9.81;
+  input.value = g0.toFixed(2);
+  out.textContent = label(g0);
+  input.oninput = () => {
+    const g = Number(input.value);
+    out.textContent = label(g);
+    store.settings = { ...store.settings, aLat: Math.round(g * 9.81 * 100) / 100 };
+  };
+}
+
 function bindRange(id, key, fmt, s) {
   const input = $(id), out = $(id + '-out');
   input.value = s[key];
