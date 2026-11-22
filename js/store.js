@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   aLat: 2.5,           // komfort i kurvor (m/s²)
   giveWayKmh: 20,
   roundaboutKmh: 25,
+  trailer: false,      // släpvagnsläge
+  trailerMaxKmh: 80,
+  trailerALat: 1.77,   // 0,18 g
 });
 
 export const store = {
@@ -31,6 +34,8 @@ export const store = {
   set calibration(v) { set('calibration', v); },
   get settings() { return { ...DEFAULT_SETTINGS, ...(get('settings') || {}) }; },
   set settings(v) { set('settings', v); },
+  get calibrationTrailer() { return get('calibrationTrailer'); },
+  set calibrationTrailer(v) { set('calibrationTrailer', v); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

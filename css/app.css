@@ -149,6 +149,7 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   color: var(--muted); cursor: pointer;
 }
 .chip.ok { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.chip.on { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
 .chip.todo { color: var(--approach); border-color: color-mix(in srgb, var(--approach) 40%, var(--line)); }
 
 .map {
@@ -184,6 +185,11 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   width: 58px; height: 58px; border-radius: 50%; background: #fff; color: #111;
   border: 7px solid #d0021b; display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 1.3rem; font-variant-numeric: tabular-nums; box-sizing: border-box;
+}
+.sign-limit.trailer { position: relative; }
+.sign-limit.trailer::after {
+  content: 'släp'; position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%);
+  font-size: 0.65rem; font-weight: 700; color: var(--muted); white-space: nowrap;
 }
 .sign-curve {
   min-width: 58px; height: 58px; border-radius: 10px; background: #f7c600; color: #111;

@@ -19,6 +19,11 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Gör ett **rullprov** (Inställningar → Kalibrering): i växel, ca 80 → 30 km/h på rak, plan väg, en gång i varje riktning.
 - Utan nyckel fungerar kalibreringen och **demorutten**, som simulerar en körning i fyrdubbel fart.
 
+## Kurvor och släpvagn
+
+- **Rekommenderad kurvfart** räknas ur kurvradien och vald sidokraft (standard 0,25 g; 1 g = 9,81 m/s²). Över 50 km/h sänks sidokraften gradvis till 65 % vid 110 km/h.
+- **Släpvagnsläge** (hemskärmen, ruttöversikten eller Inställningar): skyltad gräns men högst 80 km/h (inställbart, t.ex. 40 km/h för tung obromsad släpvagn), sidokraft 0,18 g i kurvor och en egen kalibrering. Utan rullprov med släpet uppskattas modellen från bilens värden.
+
 ## Utveckling
 
 Ingen byggprocess – rena ES-moduler.
@@ -38,6 +43,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/api.js` | OpenRouteService (rutt, geokodning) och Open-Meteo (höjd) |
 | `js/sensors.js`, `js/audio.js`, `js/mapview.js` | Webbläsarens sensorer, ljud/röst, karta på canvas |
 | `js/app.js` | Vyer och flöden |
+| `js/trailer.js` | Släpvagnsläge: maxfart och uppskattad rullmodell |
 | `js/demo.js`, `js/sim.js` | Syntetisk demorutt och simulerad bil |
 
 ## Publicering
