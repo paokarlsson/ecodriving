@@ -22,15 +22,41 @@ export async function requestMotionPermission() {
   return res;
 }
 
-export function requestLocationOnce() {
+export function requestLocationOnce({ highAccuracy = true, timeout = 20000, maximumAge = 10000 } = {}) {
   return new Promise((resolve, reject) => {
     if (!('geolocation' in navigator)) return reject(new Error('Platstjänster saknas i webbläsaren'));
     navigator.geolocation.getCurrentPosition(
       p => resolve(toObs(p)),
       e => reject(new Error(e.code === 1 ? 'Platsbehörighet nekades' : 'Kunde inte hämta position')),
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 },
+      { enableHighAccuracy: highAccuracy, timeout, maximumAge },
     );
   });
+}
+
+/** Sant om platsbehörighet redan är given (då kan positionen hämtas utan fråga). */
+export async function locationGranted() {
+  try { return (await navigator.permissions.query({ name: 'geolocation' })).state === 'granted'; }
+  catch { return false; }
+}
+
+let lastPos = null;
+let pending = null;
+/**
+ * Startposition för en rutt. Rutten behöver bara ungefär var bilen står
+ * (kartmatchningen sköter resten), så en färsk eller grov position används
+ * före en långsam GPS-låsning.
+ */
+export function startPosition({ maxAgeMs = 120000 } = {}) {
+  if (lastPos && Date.now() - lastPos.at < maxAgeMs) return Promise.resolve(lastPos.obs);
+  if (pending) return pending;
+  pending = requestLocationOnce({ highAccuracy: false, timeout: 6000, maximumAge: maxAgeMs })
+    .catch(e => {
+      if (e.message === 'Platsbehörighet nekades') throw e;
+      return requestLocationOnce({ highAccuracy: true, timeout: 20000, maximumAge: maxAgeMs });
+    })
+    .then(obs => { lastPos = { obs, at: Date.now() }; return obs; })
+    .finally(() => { pending = null; });
+  return pending;
 }
 
 function toObs(p) {

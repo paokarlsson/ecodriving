@@ -1,5 +1,5 @@
 // Bromsfri körning – appens vyer och flöden.
-import { store, maskKey, DEFAULT_SETTINGS } from './store.js';
+import { store, maskKey, DEFAULT_SETTINGS, osmCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
 import { buildRoute, headingAt, xyAt } from './route.js';
 import { fetchOsmAlongRoute, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
@@ -11,7 +11,7 @@ import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
 import { unlockAudio, sounds, speak } from './audio.js';
 import {
-  isIOS, needsMotionPermission, requestMotionPermission, requestLocationOnce,
+  isIOS, needsMotionPermission, requestMotionPermission, requestLocationOnce, startPosition, locationGranted,
   watchGps, watchMotion, watchCompass, keepAwake,
 } from './sensors.js';
 
@@ -315,6 +315,7 @@ function enterHome() {
     ? `<button class="chip ok" id="chip-calib">✓ Kalibrerad · ${esc(describeModel(c))}</button>`
     : `<button class="chip todo" id="chip-calib">Inte kalibrerad – gör ett rullprov</button>`;
   $('chip-calib').addEventListener('click', () => show('calib'));
+  if (store.key) locationGranted().then(ok => { if (ok) startPosition().catch(() => {}); });
   $('home-nokey').hidden = !!store.key;
   $('search-form').hidden = !store.key;
   renderFavorites();
@@ -331,7 +332,7 @@ $('search-form').addEventListener('submit', async e => {
   const ul = $('search-results');
   ul.innerHTML = '<li><span class="pick"><span class="spinner"></span>Söker…</span></li>';
   try {
-    if (!lastFocus) { try { lastFocus = await requestLocationOnce(); } catch { /* sök utan fokus */ } }
+    if (!lastFocus) { try { lastFocus = await startPosition(); } catch { /* sök utan fokus */ } }
     const res = await geocode(store.key, q, lastFocus);
     ul.innerHTML = '';
     if (!res.length) { ul.innerHTML = '<li><span class="pick">Inga träffar.</span></li>'; return; }
@@ -367,10 +368,11 @@ function renderFavorites() {
 // ---------- Rutt ----------
 let plan = null; // {dest, route, targets, limits, duration, demo, warnings}
 
-async function prepare(coords, elements = null) {
+async function prepare(coords, elements = null, onStep = () => {}) {
   let route = buildRoute(coords);
   const warnings = [];
   if (!route.hasEle) {
+    onStep('Hämtar höjddata…');
     try {
       const pts = [];
       for (let i = 0; i < coords.length; i++) pts.push([coords[i][1], coords[i][0]]);
@@ -382,8 +384,19 @@ async function prepare(coords, elements = null) {
     } catch { warnings.push('Höjddata saknas – backar räknas inte in.'); }
   }
   if (!elements) {
-    try { elements = await fetchOsmAlongRoute(route); }
-    catch { elements = []; warnings.push('Kunde inte hämta trafikljus och hastighetsgränser (Overpass). Bara kurvor används.'); }
+    const t0 = performance.now();
+    try {
+      elements = await fetchOsmAlongRoute(route, {
+        cache: osmCache,
+        onProgress: (done, total) => {
+          if (total) onStep(`Hämtar trafikljus och hastighetsgränser… ${done}/${total}`);
+        },
+      });
+    } catch (e) {
+      elements = [];
+      warnings.push(`Kunde inte hämta trafikljus och hastighetsgränser (${e.message}). Bara kurvor används.`);
+    }
+    console.info(`Vägdata: ${Math.round(performance.now() - t0)} ms`);
   }
   const s = store.settings;
   const limits = assignLimits(route, elements);
@@ -394,16 +407,18 @@ async function prepare(coords, elements = null) {
 async function planRoute(dest) {
   show('overview');
   $('ov-title').textContent = dest.name;
-  $('ov-summary').innerHTML = '<span><span class="spinner"></span>Hämtar rutt, höjd och vägdata…</span>';
+  const step = text => { $('ov-summary').innerHTML = `<span><span class="spinner"></span>${esc(text)}</span>`; };
+  step('Hämtar din position…');
   $('ov-counts').innerHTML = '';
   $('ov-warn').hidden = true;
   $('ov-start').disabled = true;
   $('ov-fav').hidden = true;
   const ctx = $('ov-map').getContext('2d'); ctx.clearRect(0, 0, 9999, 9999);
   try {
-    const here = await requestLocationOnce();
+    const here = await startPosition();
+    step('Hämtar rutt…');
     const r = await getRoute(store.key, here, dest);
-    const p = await prepare(r.coords);
+    const p = await prepare(r.coords, null, step);
     plan = { dest, ...p, duration: r.duration, demo: false };
     renderOverview();
   } catch (e) {

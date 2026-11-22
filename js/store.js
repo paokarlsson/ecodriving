@@ -46,3 +46,45 @@ export function maskKey(k) {
   if (k.length <= 8) return '••••';
   return k.slice(0, 4) + '••••••' + k.slice(-4);
 }
+
+// Vägdata per kartcell, så att samma område inte hämtas igen.
+// OSM ändras sällan; 30 dagar räcker. Blir lagringen full rensas de äldsta.
+const OSM_PREFIX = P + 'osm.';
+const OSM_TTL = 30 * 24 * 3600 * 1000;
+
+function evictOsm(fraction = 0.5) {
+  try {
+    const entries = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(OSM_PREFIX)) {
+        let t = 0;
+        try { t = JSON.parse(localStorage.getItem(k)).t || 0; } catch { /* trasig post */ }
+        entries.push([k, t]);
+      }
+    }
+    entries.sort((a, b) => a[1] - b[1]);
+    entries.slice(0, Math.max(1, Math.ceil(entries.length * fraction))).forEach(([k]) => localStorage.removeItem(k));
+    return entries.length > 0;
+  } catch { return false; }
+}
+
+export const osmCache = {
+  get(key) {
+    try {
+      const raw = localStorage.getItem(OSM_PREFIX + key);
+      if (!raw) return null;
+      const v = JSON.parse(raw);
+      if (!v || Date.now() - v.t > OSM_TTL) { localStorage.removeItem(OSM_PREFIX + key); return null; }
+      return v.els;
+    } catch { return null; }
+  },
+  set(key, els) {
+    const data = JSON.stringify({ t: Date.now(), els });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { localStorage.setItem(OSM_PREFIX + key, data); return true; }
+      catch { if (!evictOsm()) return false; }
+    }
+    return false;
+  },
+};

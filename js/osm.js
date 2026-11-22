@@ -30,61 +30,145 @@ export function parseMaxspeed(v) {
   return m[2] === 'mph' ? Math.round(n * 1.609) : n;
 }
 
-/** Punkter längs rutten (lat, lon) med ungefär jämnt avstånd, för Overpass around-filtret. */
-export function corridorPoints(route, spacing = 80) {
+// Vägdata hämtas i små rutor (celler) längs rutten i stället för med
+// Overpass "around" längs en lång linje, som är mycket långsammare. Cellerna
+// har fasta gränser, så samma område kan sparas i telefonen och återanvändas.
+export const CELL_LAT = 0.005;   // ca 555 m
+export const CELL_LON = 0.008;   // ca 470–600 m i Sverige
+const DRIVABLE = 'motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link';
+
+const cellKey = (i, j) => `${i}_${j}`;
+export function cellBounds(key) {
+  const [i, j] = key.split('_').map(Number);
+  return { s: i * CELL_LAT, w: j * CELL_LON, n: (i + 1) * CELL_LAT, e: (j + 1) * CELL_LON };
+}
+
+/** Cellerna som rutten (med marginal pad meter) passerar, i ruttens ordning. */
+export function routeCells(route, pad = 40) {
+  const seen = new Set();
   const out = [];
-  const every = Math.max(1, Math.round(spacing / route.step));
-  for (let i = 0; i < route.n; i += every) {
-    const [lat, lon] = route.proj.toLL(route.X[i], route.Y[i]);
-    out.push([lat, lon]);
+  const dLat = pad / 111320;
+  for (let k = 0; k < route.n; k++) {
+    const [lat, lon] = route.proj.toLL(route.X[k], route.Y[k]);
+    const dLon = dLat / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+    const i0 = Math.floor((lat - dLat) / CELL_LAT), i1 = Math.floor((lat + dLat) / CELL_LAT);
+    const j0 = Math.floor((lon - dLon) / CELL_LON), j1 = Math.floor((lon + dLon) / CELL_LON);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const key = cellKey(i, j);
+      if (!seen.has(key)) { seen.add(key); out.push(key); }
+    }
   }
-  const [lat, lon] = route.proj.toLL(route.X[route.n - 1], route.Y[route.n - 1]);
-  out.push([lat, lon]);
   return out;
 }
 
-export function overpassQuery(points) {
-  const ll = points.map(([a, b]) => `${a.toFixed(6)},${b.toFixed(6)}`).join(',');
-  return `[out:json][timeout:90];
-(
-  way(around:20,${ll})[highway][maxspeed];
-  way(around:20,${ll})[junction=roundabout];
-  node(around:12,${ll})[highway~"^(traffic_signals|stop|give_way|mini_roundabout)$"];
-);
-out geom;`;
+export function overpassQuery(cells) {
+  const parts = [];
+  for (const key of cells) {
+    const b = cellBounds(key);
+    const bb = `${b.s.toFixed(4)},${b.w.toFixed(4)},${b.n.toFixed(4)},${b.e.toFixed(4)}`;
+    parts.push(
+      `way[highway~"^(${DRIVABLE})$"][maxspeed](${bb});`,
+      `way[junction~"^(roundabout|circular)$"](${bb});`,
+      `node[highway~"^(traffic_signals|stop|give_way|mini_roundabout)$"](${bb});`,
+    );
+  }
+  return `[out:json][timeout:60];\n(\n${parts.join('\n')}\n);\nout geom qt;`;
 }
 
-/** Hämtar OSM-element längs rutten. Långa rutter delas upp i bitar. */
-export async function fetchOsmAlongRoute(route, { fetchImpl = fetch, signal } = {}) {
-  const pts = corridorPoints(route);
-  const chunk = 250;
-  const elements = new Map();
-  for (let i = 0; i < pts.length; i += chunk - 1) {
-    const part = pts.slice(i, i + chunk);
-    if (part.length < 2) break;
-    const q = overpassQuery(part);
-    let lastErr;
-    let ok = false;
-    for (const ep of OVERPASS_ENDPOINTS) {
-      try {
-        const res = await fetchImpl(ep, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'data=' + encodeURIComponent(q),
-          signal,
-        });
-        if (!res.ok) throw new Error(`Overpass svarade ${res.status}`);
-        const json = await res.json();
-        for (const el of json.elements || []) elements.set(el.type + el.id, el);
-        ok = true;
-        break;
-      } catch (e) {
-        if (e.name === 'AbortError') throw e;
-        lastErr = e;
-      }
-    }
-    if (!ok) throw lastErr || new Error('Overpass gick inte att nå');
+/** Behåller bara det appen använder, så att svaret blir litet att spara. */
+export function compactElement(el) {
+  const r6 = x => Math.round(x * 1e6) / 1e6;
+  if (el.type === 'node') {
+    return { type: 'node', id: el.id, lat: r6(el.lat), lon: r6(el.lon), tags: { highway: el.tags?.highway } };
   }
+  const tags = {};
+  if (el.tags?.maxspeed) tags.maxspeed = el.tags.maxspeed;
+  if (el.tags?.junction) tags.junction = el.tags.junction;
+  if (el.tags?.highway) tags.highway = el.tags.highway;
+  return { type: 'way', id: el.id, tags, geometry: (el.geometry || []).filter(Boolean).map(p => ({ lat: r6(p.lat), lon: r6(p.lon) })) };
+}
+
+/** Cellerna (bland de efterfrågade) som ett element berör. */
+function cellsOfElement(el, wanted) {
+  const out = new Set();
+  const add = (i, j) => { const k = cellKey(i, j); if (wanted.has(k)) out.add(k); };
+  if (el.type === 'node') { add(Math.floor(el.lat / CELL_LAT), Math.floor(el.lon / CELL_LON)); return out; }
+  const g = el.geometry || [];
+  for (let k = 0; k < g.length; k++) {
+    const a = g[k], b = g[Math.min(g.length - 1, k + 1)];
+    const i0 = Math.floor(Math.min(a.lat, b.lat) / CELL_LAT), i1 = Math.floor(Math.max(a.lat, b.lat) / CELL_LAT);
+    const j0 = Math.floor(Math.min(a.lon, b.lon) / CELL_LON), j1 = Math.floor(Math.max(a.lon, b.lon) / CELL_LON);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) add(i, j);
+  }
+  return out;
+}
+
+async function overpassFetch(query, { fetchImpl, signal, timeoutMs }) {
+  let lastErr;
+  for (const ep of OVERPASS_ENDPOINTS) {
+    const ctrl = new AbortController();
+    const onAbort = () => ctrl.abort();
+    signal?.addEventListener('abort', onAbort);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetchImpl(ep, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error(`Overpass svarade ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      lastErr = e.name === 'AbortError' ? new Error('Overpass svarade inte i tid') : e;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+  throw lastErr || new Error('Overpass gick inte att nå');
+}
+
+/**
+ * Hämtar OSM-element längs rutten.
+ * cache = {get(key) → elements|null, set(key, elements)} (valfri, t.ex. localStorage)
+ * onProgress(done, total) anropas efter varje hämtad del.
+ */
+export async function fetchOsmAlongRoute(route, {
+  fetchImpl = fetch, signal, cache = null, onProgress = () => {},
+  cellsPerRequest = 24, concurrency = 2, timeoutMs = 25000,
+} = {}) {
+  const cells = routeCells(route);
+  const elements = new Map();
+  const missing = [];
+  for (const key of cells) {
+    const hit = cache && cache.get(key);
+    if (hit) for (const el of hit) elements.set(el.type + el.id, el);
+    else missing.push(key);
+  }
+  const batches = [];
+  for (let i = 0; i < missing.length; i += cellsPerRequest) batches.push(missing.slice(i, i + cellsPerRequest));
+  let done = 0;
+  onProgress(done, batches.length);
+
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length) {
+      const batch = batches[next++];
+      const json = await overpassFetch(overpassQuery(batch), { fetchImpl, signal, timeoutMs });
+      const wanted = new Set(batch);
+      const perCell = new Map(batch.map(k => [k, []]));
+      for (const raw of json.elements || []) {
+        const el = compactElement(raw);
+        elements.set(el.type + el.id, el);
+        for (const k of cellsOfElement(el, wanted)) perCell.get(k).push(el);
+      }
+      if (cache) for (const [k, els] of perCell) cache.set(k, els);
+      onProgress(++done, batches.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
   return [...elements.values()];
 }
 
