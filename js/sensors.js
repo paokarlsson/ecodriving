@@ -74,7 +74,12 @@ export function watchGps(onObs, onError = () => {}) {
   if (!('geolocation' in navigator)) { onError(new Error('Platstjänster saknas')); return () => {}; }
   const id = navigator.geolocation.watchPosition(
     p => onObs(toObs(p)),
-    e => onError(new Error(e.code === 1 ? 'Platsbehörighet nekades' : 'GPS-fel: ' + e.message)),
+    e => {
+      // Timeout (kod 3) betyder bara att ingen ny position kom i tid, t.ex. i
+      // en tunnel. Bevakningen fortsätter, så det visas inte som ett fel.
+      if (e.code === 3) return;
+      onError(new Error(e.code === 1 ? 'Platsbehörighet nekades' : 'Ingen GPS-position just nu'));
+    },
     { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
   );
   return () => navigator.geolocation.clearWatch(id);

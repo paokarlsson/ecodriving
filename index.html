@@ -130,6 +130,9 @@
       <ul id="favorites" class="list"></ul>
       <h2 class="section-title" id="recent-title" hidden>Senaste</h2>
       <ul id="recents" class="list"></ul>
+      <button class="btn" id="rec-btn">Spela in körning utan rutt</button>
+      <p class="hint">Bara loggning: GPS, gyro, accelerometer och kompass sparas i telefonen. Inga signaler.</p>
+
       <h2 class="section-title">Demorutter</h2>
       <p class="hint">En simulerad bil kör en riktig väg, med förare som ibland inte följer signalerna, trafikljus som slår om och GPS-brus. Rutten hämtas första gången med din nyckel och sparas sedan i telefonen.</p>
       <ul id="demo-routes" class="list"></ul>
@@ -321,6 +324,19 @@
         <button class="btn small ghost danger" id="set-reset">Radera allt i telefonen</button>
       </div>
       <p class="hint">Vägdata © OpenStreetMap-bidragsgivare. Rutter: openrouteservice (HeiGIT). Höjd: Open-Meteo.</p>
+    </div>
+  </section>
+
+  <!-- Inspelning utan rutt -->
+  <section class="screen" id="record" hidden>
+    <header class="bar"><h1>Inspelning</h1><span class="rec-dot" aria-hidden="true"></span></header>
+    <div class="content">
+      <div class="big-speed"><span id="rec-speed">–</span><small>km/h</small></div>
+      <div class="stats" id="rec-stats"></div>
+      <p class="hint">Allt sparas i telefonen medan du kör. Skärmen hålls vaken. Rör inte telefonen under körning.</p>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="rec-stop">Avsluta och spara</button>
     </div>
   </section>
 

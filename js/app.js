@@ -1,4 +1,5 @@
 // Bromsfri körning – appens vyer och flöden.
+import { haversine } from './geo.js';
 import { store, maskKey, DEFAULT_SETTINGS, osmCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
 import { buildRoute, headingAt, xyAt, curveTargets, gradeAt } from './route.js';
@@ -10,6 +11,7 @@ import { demoData } from './demo.js';
 import { estimateTrailerModel, trailerLimits } from './trailer.js';
 import { LateralMeter, CurveTracker, learnALat, isStraightAt, routeYaw } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
+import { RawRecorder, readRaw, deleteRaw, persistStorage } from './rawstore.js';
 import { CoastLearner, CoastStats, acceptSegment } from './coastlearn.js';
 
 // Körloggar i telefonens lagring
@@ -18,7 +20,7 @@ const safeStorage = {
   setItem: (k, v) => localStorage.setItem(k, v),
   removeItem: k => { try { localStorage.removeItem(k); } catch { /* blockerad */ } },
 };
-const logStore = makeLogStore(safeStorage);
+const logStore = makeLogStore(safeStorage, { onRemove: id => deleteRaw(id) });
 import { SimCar, RealCar, seededRandom } from './sim.js';
 import { DEMO_ROUTES, compactCoords } from './demoroutes.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
@@ -560,7 +562,8 @@ async function planRoute(dest) {
     step('Hämtar rutt…');
     const r = await getRoute(store.key, here, dest);
     const p = await prepare(r.coords, null, step);
-    plan = { dest, ...p, duration: r.duration, demo: false };
+    plan = { dest, ...p, duration: r.duration, demo: false,
+      apiRoute: { from: { lat: here.lat, lon: here.lon }, to: { lat: dest.lat, lon: dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
     renderOverview();
   } catch (e) {
     $('ov-summary').textContent = '';
@@ -703,6 +706,8 @@ function startDrive() {
     route: routeMeta(plan),
   });
   drive.logSavedAt = Date.now();
+  drive.raw = plan.demo ? null : new RawRecorder(drive.log.id);
+  if (drive.raw) { persistStorage(); recordApi(); }
   hideAsk();
   show('drive');
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
@@ -732,7 +737,7 @@ function startDrive() {
     drive.stops.push(() => clearInterval(drive.simTimer));
   } else {
     drive.stops.push(watchGps(onDriveObs, e => toast(e.message, true)));
-    drive.stops.push(watchCompass(h => { drive.compass = h; }));
+    drive.stops.push(watchCompass(h => { drive.compass = h; drive.raw?.addCompass(Date.now() / 1000, h); }));
     drive.stops.push(watchMotion(onDriveMotion));
   }
   $('d-limit').classList.toggle('trailer', trailerOn());
@@ -779,6 +784,19 @@ function saveDriveLog(stats = null) {
   });
   logStore.save(drive.log);
   drive.logSavedAt = Date.now();
+  if (stats && drive.raw) {
+    const log = drive.log, raw = drive.raw;
+    drive.raw = null;
+    log.meta.raw = { ...raw.counts };
+    raw.close().then(c => { log.meta.raw = c; logStore.save(log); });
+  }
+}
+
+/** Svaren från API:erna (rutt och vägdata) till rådatan. */
+function recordApi() {
+  if (!drive.raw || !plan) return;
+  if (plan.apiRoute) drive.raw.addApi('route', plan.apiRoute);
+  if (plan.elements) drive.raw.addApi('osm', { stats: plan.osmStats || null, elements: plan.elements });
 }
 
 /** En rullning är klar: logga den, och lär av den om den är ren. */
@@ -818,6 +836,7 @@ function stopDrive() {
 
 // ---------- Kurvkraft ----------
 function onDriveMotion(m) {
+  drive.raw?.addMotion(m);
   if (!drive.meter) return;
   drive.meter.addMotion(m);
   if (drive.coast && m.ax != null) drive.coast.addAccel(m.t, Math.hypot(m.ax, m.ay, m.az));
@@ -972,6 +991,7 @@ function applyNewCurveSpeeds() {
 function onDriveObs(obs) {
   if (!drive.engine || drive.rerouting) return;
   drive.lastObs = obs;
+  if (!plan.demo) drive.raw?.addGps(obs);
   const { view, events } = drive.engine.update(obs);
   const arrived = events.some(e => e.type === 'arrived');
   if (!arrived) trackCurves(view, obs);
@@ -1058,7 +1078,9 @@ async function reroute(obs) {
     const r = await getRoute(store.key, obs, plan.dest);
     const p = await prepare(r.coords);
     const stats = drive.engine.stats;
-    plan = { ...plan, ...p, duration: r.duration };
+    plan = { ...plan, ...p, duration: r.duration,
+      apiRoute: { from: { lat: obs.lat, lon: obs.lon }, to: { lat: plan.dest.lat, lon: plan.dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
+    recordApi();
     drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: store.settings.marginS });
     drive.engine.stats = stats;
     drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
@@ -1313,6 +1335,100 @@ $('set-learn-reset').addEventListener('click', () => {
 
 $('set-logs').addEventListener('click', () => show('logs'));
 
+// ---------- Inspelning utan rutt ----------
+const rec = { log: null, raw: null, meter: null, stops: [], dist: 0, last: null, startT: null, courseRate: 0, savedAt: 0, timer: null };
+
+$('rec-btn').addEventListener('click', startRecording);
+
+async function startRecording() {
+  unlockAudio();
+  if (needsMotionPermission()) await requestMotionPermission();
+  persistStorage();
+  Object.assign(rec, { dist: 0, last: null, startT: Date.now() / 1000, courseRate: 0, lastGps: null });
+  rec.log = new DriveLog({ kind: 'recording', settings: { ...store.settings }, model: { ...model(), source: modelSource() } });
+  rec.raw = new RawRecorder(rec.log.id);
+  rec.meter = new LateralMeter();
+  const ga = store.gyroAxis;
+  if (ga && Array.isArray(ga.axis)) { rec.meter.axis = ga.axis; rec.meter.axisR2 = ga.r2; }
+  rec.savedAt = Date.now();
+  rec.stops.push(keepAwake());
+  rec.stops.push(watchGps(onRecGps, e => toast(e.message, true)));
+  rec.stops.push(watchMotion(onRecMotion));
+  rec.stops.push(watchCompass(h => rec.raw?.addCompass(Date.now() / 1000, h)));
+  rec.timer = setInterval(renderRecording, 1000);
+  rec.stops.push(() => clearInterval(rec.timer));
+  show('record');
+  renderRecording();
+}
+
+function onRecGps(o) {
+  rec.raw?.addGps(o);
+  const v = o.speed ?? 0;
+  rec.meter.setSpeed(v);
+  // Sträcka och GPS-kursens ändring (för att lära gyrots axel utan rutt)
+  if (rec.last && o.accuracy != null && o.accuracy < 30) {
+    const d = haversine(rec.last.lat, rec.last.lon, o.lat, o.lon);
+    if (d < 200) rec.dist += d;
+    const dt = o.t - rec.last.t;
+    const h1 = rec.last.heading, h2 = o.heading;
+    if (dt > 0 && dt < 3 && v > 5 && h1 != null && h2 != null) {
+      const dh = ((h2 - h1 + 540) % 360) - 180;
+      rec.courseRate = (dh * Math.PI / 180) / dt; // höger positiv
+      rec.meter.setStraight(Math.abs(dh / dt) < 0.5);
+    } else rec.courseRate = 0;
+  }
+  rec.last = o;
+  const m = rec.meter.current();
+  rec.log.sample(o.t, { s: rec.dist, lat: o.lat, lon: o.lon, kmh: v * 3.6, acc: o.accuracy, mode: 'rec', g: m.g, side: m.side, alt: o.alt });
+  if (Date.now() - rec.savedAt > 30000) { logStore.save(rec.log); rec.savedAt = Date.now(); }
+}
+
+function onRecMotion(m) {
+  rec.raw?.addMotion(m);
+  if (!rec.meter) return;
+  rec.meter.addMotion(m);
+  if (rec.meter.v > 5) rec.meter.learn(rec.courseRate);
+}
+
+function renderRecording() {
+  if (!rec.log) return;
+  const o = rec.last;
+  const secs = Math.round(Date.now() / 1000 - rec.startT);
+  const c = rec.raw ? rec.raw.counts : { gps: 0, motion: 0 };
+  const hz = secs > 0 ? Math.round(c.motion / secs) : 0;
+  const m = rec.meter.current();
+  $('rec-speed').textContent = o && o.speed != null ? Math.round(o.speed * 3.6) : '–';
+  const mm = String(Math.floor(secs / 60)).padStart(2, '0'), ss = String(secs % 60).padStart(2, '0');
+  $('rec-stats').innerHTML = [
+    [`${mm}:${ss}`, 'tid'],
+    [fmtDist(rec.dist) || '0 m', 'sträcka'],
+    [o ? `±${Math.round(o.accuracy)} m` : '–', 'GPS-noggrannhet'],
+    [`${c.gps}`, 'GPS-punkter'],
+    [`${hz} /s`, 'sensorvärden'],
+    [fmtG(m.g), rec.meter.axis ? 'sidokraft' : 'sidokraft (gyrot lär sig)'],
+  ].map(([b, t]) => `<div class="stat"><b>${esc(b)}</b><span>${esc(t)}</span></div>`).join('');
+}
+
+$('rec-stop').addEventListener('click', async () => {
+  if (!rec.log) return;
+  rec.stops.forEach(f => f());
+  rec.stops = [];
+  const log = rec.log, raw = rec.raw, meter = rec.meter;
+  rec.log = null; rec.raw = null;
+  if (meter?.axis) store.gyroAxis = { axis: meter.axis, r2: meter.axisR2, date: new Date().toISOString() };
+  log.finish({
+    distance: rec.dist, durationS: Date.now() / 1000 - rec.startT,
+    gyroAxis: meter?.axis ? meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
+    gyroAxisR2: meter?.axisR2 ?? null,
+  });
+  log.meta.raw = await raw.close();
+  logStore.save(log);
+  toast(`Inspelningen är sparad: ${fmtDist(rec.dist) || '0 m'}, ${log.meta.raw.gps} GPS-punkter, ${log.meta.raw.motion} sensorvärden.`);
+  stack.length = 0;
+  stack.push('home');
+  show('logs');
+});
+
 function enterLogs() {
   $('logs-text-card').hidden = true;
   const ul = $('logs-list');
@@ -1324,7 +1440,7 @@ function enterLogs() {
     const when = new Date(e.startedAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
     const dist = e.kind === 'calibration' ? '' : (e.distanceM ? ` · ${fmtDist(e.distanceM)}` : '');
     li.innerHTML = `<span class="log-title">${esc(e.title)}</span>
-      <span class="log-meta">${esc(when)}${esc(dist)} · ${e.samples} mätpunkter · ${e.events} händelser</span>
+      <span class="log-meta">${esc(when)}${esc(dist)} · ${e.samples} mätpunkter · ${e.events} händelser${e.raw ? ` · rådata: ${e.raw.gps} GPS, ${e.raw.motion} sensorvärden${e.raw.api ? `, ${e.raw.api} API-svar` : ''}` : ''}</span>
       <span class="log-btns">
         <button class="btn small primary" data-a="copy">Kopiera för analys</button>
         <button class="btn small" data-a="file">Spara fil</button>
@@ -1364,13 +1480,16 @@ async function copyLog(log) {
   }
 }
 
-function logFile(log) {
-  const text = JSON.stringify(log.toJSON({ full: true }), null, 1);
+/** Hela loggen med all rådata (GPS, gyro, accelerometer, kompass, API-svar). */
+async function logFile(log) {
+  const json = log.toJSON({ full: true });
+  try { json.raw = await readRaw(log.id); } catch { json.raw = null; }
+  const text = JSON.stringify(json);
   return new File([text], `${log.id}.json`, { type: 'application/json' });
 }
 
-function downloadLog(log) {
-  const f = logFile(log);
+async function downloadLog(log, file = null) {
+  const f = file || await logFile(log);
   const url = URL.createObjectURL(f);
   const a = document.createElement('a');
   a.href = url; a.download = f.name;
@@ -1379,11 +1498,11 @@ function downloadLog(log) {
 }
 
 async function shareLog(log) {
-  const f = logFile(log);
+  const f = await logFile(log);
   try {
     if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: 'Körlogg' });
-    else downloadLog(log);
-  } catch (e) { if (e.name !== 'AbortError') downloadLog(log); }
+    else downloadLog(log, f);
+  } catch (e) { if (e.name !== 'AbortError') downloadLog(log, f); }
 }
 
 $('set-trailer').addEventListener('change', e => { setTrailer(e.target.checked); });

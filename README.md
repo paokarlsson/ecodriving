@@ -55,6 +55,21 @@ Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse 
 
 Hemskärmen har färdiga demorutter mellan riktiga platser (Östersund–Brunflo, Åre–Duved, Slussen–Solna, Lindholmen–Mölndal, Uppsala–Sigtuna). Första gången hämtas rutten med användarens egen nyckel och sparas i telefonen; vägdatan sparas i den vanliga cachen. Sedan kör en simulerad förare rutten (`RealCar` i `js/sim.js`): egen fartmarginal kring gränsen, mjuk acceleration med begränsat ryck, kurvor nära rekommenderad fart, bekväm inbromsning, följer släpp-signaler efter 0,8–1,6 s men inte alltid, trafikljus som är röda eller gröna slumpvis, GPS- och gyrobrus och rullegenskaper som avviker lite från appens modell. Farten ändras med knappen i körvyn (1×, 4×, 8×, 16×). Appen lär sig inte av demokörningar. Den korta testbanan kräver ingen nyckel.
 
+## Rådata och inspelning utan rutt
+
+Varje riktig körning sparar också all rådata i telefonens databas (IndexedDB, eftersom localStorage bara rymmer ca 5 MB):
+
+| Data | Fält | Frekvens |
+| --- | --- | --- |
+| GPS | `t, lat, lon, alt, acc, altAcc, speed, heading` | varje position (ca 1/s) |
+| Rörelse | `t, ax, ay, az` (utan tyngdkraft), `gx, gy, gz` (med tyngdkraft), `alpha, beta, gamma` (gyro, grader/s) | varje sensorhändelse (ca 50–60/s) |
+| Kompass | `t, heading` | varje händelse |
+| API | ruttsvaret (koordinater med höjd, sträcka, tid) och vägdatan från Overpass | vid planering och ny rutt |
+
+`t` är sekunder sedan starten. *Spara fil* / *Dela* i körloggarna ger loggen med rådatan under `raw`; *Kopiera för analys* är som förut kompakt utan rådata. Rådatan raderas tillsammans med sin logg, och de 10 senaste loggarna sparas.
+
+**Spela in körning utan rutt** (hemskärmen): bara loggning, inga signaler. Visar tid, sträcka, GPS-noggrannhet, antal punkter, sensorfrekvens och sidokraft; gyrots axel lärs in mot GPS-kursen.
+
 ## Utveckling
 
 Ingen byggprocess – rena ES-moduler.
@@ -74,6 +89,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/api.js` | OpenRouteService (rutt, geokodning) och Open-Meteo (höjd) |
 | `js/sensors.js`, `js/audio.js`, `js/mapview.js` | Webbläsarens sensorer, ljud/röst, karta på canvas |
 | `js/app.js` | Vyer och flöden |
+| `js/rawstore.js` | Rådata (GPS, gyro, accelerometer, kompass, API-svar) i IndexedDB |
 | `js/logbook.js` | Körlogg som JSON och lagring av de senaste loggarna |
 | `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |

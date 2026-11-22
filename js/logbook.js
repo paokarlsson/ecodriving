@@ -84,11 +84,14 @@ export class DriveLog {
     const last = this.rows[this.rows.length - 1];
     return {
       id: this.id, kind: this.meta.kind || 'drive',
-      title: this.meta.kind === 'calibration' ? 'Rullprov' : (this.meta.dest?.name || 'Körning'),
+      title: this.meta.kind === 'calibration' ? 'Rullprov'
+        : this.meta.kind === 'recording' ? 'Inspelning utan rutt'
+        : (this.meta.dest?.name || 'Körning'),
       startedAt: this.startedAt,
       distanceM: this.stats?.distance ?? (last ? last[1] : null),
       events: this.events.length,
       samples: this.rows.length,
+      raw: this.meta.raw || null,
     };
   }
 
@@ -117,7 +120,7 @@ function roundAll(o) {
  * Lagring av loggar. storage = localStorage-liknande objekt.
  * Högst max loggar sparas; de äldsta tas bort först.
  */
-export function makeLogStore(storage, { prefix = 'bromsfri.log.', max = 10 } = {}) {
+export function makeLogStore(storage, { prefix = 'bromsfri.log.', max = 10, onRemove = () => {} } = {}) {
   const indexKey = prefix + 'index';
   const readIndex = () => { try { return JSON.parse(storage.getItem(indexKey)) || []; } catch { return []; } };
   const writeIndex = idx => storage.setItem(indexKey, JSON.stringify(idx));
@@ -134,6 +137,7 @@ export function makeLogStore(storage, { prefix = 'bromsfri.log.', max = 10 } = {
             idx.sort((a, b) => a.startedAt - b.startedAt);
             const old = idx.shift();
             storage.removeItem(prefix + old.id);
+            onRemove(old.id);
           }
           writeIndex(idx);
           return true;
@@ -143,6 +147,7 @@ export function makeLogStore(storage, { prefix = 'bromsfri.log.', max = 10 } = {
           idx.sort((a, b) => a.startedAt - b.startedAt);
           const old = idx.shift();
           storage.removeItem(prefix + old.id);
+          onRemove(old.id);
           writeIndex(idx);
         }
       }
@@ -153,6 +158,7 @@ export function makeLogStore(storage, { prefix = 'bromsfri.log.', max = 10 } = {
     },
     remove(id) {
       storage.removeItem(prefix + id);
+      onRemove(id);
       writeIndex(readIndex().filter(e => e.id !== id));
     },
   };
