@@ -300,3 +300,4 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   .ring-fg { transition: none; }
   .spinner { animation-duration: 2s; }
 }
+.list li > button.pick:disabled { opacity: 0.55; cursor: default; }

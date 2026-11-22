@@ -57,6 +57,9 @@ export const store = {
   /** Inlärda rullningar per profil: {car: CoastStats-JSON, trailer: …}. */
   get coastLearn() { return get('coastLearn', {}); },
   set coastLearn(v) { set('coastLearn', v); },
+  /** Hämtade demorutter: {id: {coords, distance, duration, fetched}}. */
+  get demoRoutes() { return get('demoRoutes', {}); },
+  set demoRoutes(v) { set('demoRoutes', v); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

@@ -50,6 +50,10 @@ Innehåll: `kind` (`drive` | `calibration`), `dest`, `trailer`, `settings`, `mod
 `samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `answer`, `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
+## Demorutter
+
+Hemskärmen har färdiga demorutter mellan riktiga platser (Östersund–Brunflo, Åre–Duved, Slussen–Solna, Lindholmen–Mölndal, Uppsala–Sigtuna). Första gången hämtas rutten med användarens egen nyckel och sparas i telefonen; vägdatan sparas i den vanliga cachen. Sedan kör en simulerad förare rutten (`RealCar` i `js/sim.js`): egen fartmarginal kring gränsen, mjuk acceleration med begränsat ryck, kurvor nära rekommenderad fart, bekväm inbromsning, följer släpp-signaler efter 0,8–1,6 s men inte alltid, trafikljus som är röda eller gröna slumpvis, GPS- och gyrobrus och rullegenskaper som avviker lite från appens modell. Farten ändras med knappen i körvyn (1×, 4×, 8×, 16×). Appen lär sig inte av demokörningar. Den korta testbanan kräver ingen nyckel.
+
 ## Utveckling
 
 Ingen byggprocess – rena ES-moduler.
@@ -73,7 +77,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/trailer.js` | Släpvagnsläge: maxfart och uppskattad rullmodell |
-| `js/demo.js`, `js/sim.js` | Syntetisk demorutt och simulerad bil |
+| `js/demo.js`, `js/demoroutes.js`, `js/sim.js` | Testbana, demorutter på riktiga vägar och simulerade bilar |
 
 ## Publicering
 
