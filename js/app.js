@@ -432,7 +432,13 @@ async function prepare(coords, elements = null, onStep = () => {}) {
     console.info(`Vägdata: ${Math.round(performance.now() - t0)} ms`);
   }
   const rawLimits = assignLimits(route, elements);
-  return computeTargets({ route, elements, rawLimits, warnings });
+  const coverage = rawLimits.coverage ?? 0;
+  if (elements.length && coverage < 0.6) {
+    warnings.push(coverage === 0
+      ? 'Ingen hastighetsgräns hittades i OpenStreetMap längs rutten. Fartmål för gränser saknas, övriga fartmål gäller.'
+      : `Hastighetsgräns finns i OpenStreetMap för bara ${Math.round(coverage * 100)} % av rutten; resten räknas med närmaste kända gräns.`);
+  }
+  return computeTargets({ route, elements, rawLimits, coverage, warnings });
 }
 
 async function planRoute(dest) {
@@ -475,7 +481,8 @@ function renderOverview() {
   $('ov-summary').innerHTML =
     `<span><b>${fmtDist(route.length)}</b></span>` +
     (duration ? `<span><b>${Math.round(duration / 60)}</b> min</span>` : '') +
-    `<span><b>${n}</b> fartmål</span>`;
+    `<span><b>${n}</b> fartmål</span>` +
+    (plan.coverage != null && !plan.demo ? `<span><b>${Math.round(plan.coverage * 100)}</b> % med gräns</span>` : '');
   const c = countKinds(targets);
   const order = ['traffic_signals', 'roundabout', 'curve', 'limit', 'give_way', 'stop'];
   $('ov-counts').innerHTML = order.filter(k => c[k]).map(k =>

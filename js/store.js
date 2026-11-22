@@ -54,7 +54,11 @@ export function maskKey(k) {
 
 // Vägdata per kartcell, så att samma område inte hämtas igen.
 // OSM ändras sällan; 30 dagar räcker. Blir lagringen full rensas de äldsta.
-const OSM_PREFIX = P + 'osm.';
+const OSM_PREFIX = P + 'osm2.';
+// Rensa vägdata från äldre versioner (saknade riktnings- och zontaggar).
+try {
+  Object.keys(localStorage).filter(k => k.startsWith(P + 'osm.')).forEach(k => localStorage.removeItem(k));
+} catch { /* blockerad lagring */ }
 const OSM_TTL = 30 * 24 * 3600 * 1000;
 
 function evictOsm(fraction = 0.5) {

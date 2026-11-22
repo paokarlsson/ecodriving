@@ -20,6 +20,9 @@ export function parseMaxspeed(v) {
     'walk': 7, 'living_street': 7,
   };
   if (zones[s] != null) return zones[s];
+  // Zoner som "SE:zone30" eller "DE:zone:30"
+  const z = s.match(/^[a-z]{2}:zone:?(\d+)$/);
+  if (z) return parseFloat(z[1]);
   if (s.includes(';')) {
     const parts = s.split(';').map(parseMaxspeed).filter(x => x != null);
     return parts.length ? Math.min(...parts) : null;
@@ -28,6 +31,24 @@ export function parseMaxspeed(v) {
   if (!m) return null;
   const n = parseFloat(m[1]);
   return m[2] === 'mph' ? Math.round(n * 1.609) : n;
+}
+
+/** Taggar som kan ge en hastighetsgräns, i prioritetsordning efter riktningen. */
+const LIMIT_TAGS = ['maxspeed', 'maxspeed:type', 'zone:maxspeed', 'source:maxspeed'];
+
+/**
+ * Gräns (km/h) för en väg i färdriktningen. forward = rutten följer vägens
+ * ritriktning. Riktningsbundna taggar går före maxspeed, som går före zon.
+ */
+export function wayLimit(tags, forward = true) {
+  if (!tags) return null;
+  const dir = parseMaxspeed(tags[forward ? 'maxspeed:forward' : 'maxspeed:backward']);
+  if (dir != null) return dir;
+  for (const k of LIMIT_TAGS) {
+    const v = parseMaxspeed(tags[k]);
+    if (v != null) return v;
+  }
+  return null;
 }
 
 // Vägdata hämtas i små rutor (celler) längs rutten i stället för med
@@ -67,7 +88,7 @@ export function overpassQuery(cells) {
     const b = cellBounds(key);
     const bb = `${b.s.toFixed(4)},${b.w.toFixed(4)},${b.n.toFixed(4)},${b.e.toFixed(4)}`;
     parts.push(
-      `way[highway~"^(${DRIVABLE})$"][maxspeed](${bb});`,
+      `way[highway~"^(${DRIVABLE})$"][~"^(maxspeed|maxspeed:forward|maxspeed:backward|maxspeed:type|zone:maxspeed|source:maxspeed)$"~"."](${bb});`,
       `way[junction~"^(roundabout|circular)$"](${bb});`,
       `node[highway~"^(traffic_signals|stop|give_way|mini_roundabout)$"](${bb});`,
     );
@@ -82,7 +103,9 @@ export function compactElement(el) {
     return { type: 'node', id: el.id, lat: r6(el.lat), lon: r6(el.lon), tags: { highway: el.tags?.highway } };
   }
   const tags = {};
-  if (el.tags?.maxspeed) tags.maxspeed = el.tags.maxspeed;
+  for (const k of ['maxspeed', 'maxspeed:forward', 'maxspeed:backward', ...LIMIT_TAGS.slice(1)]) {
+    if (el.tags?.[k]) tags[k] = el.tags[k];
+  }
   if (el.tags?.junction) tags.junction = el.tags.junction;
   if (el.tags?.highway) tags.highway = el.tags.highway;
   return { type: 'way', id: el.id, tags, geometry: (el.geometry || []).filter(Boolean).map(p => ({ lat: r6(p.lat), lon: r6(p.lon) })) };
@@ -118,7 +141,13 @@ async function overpassFetch(query, { fetchImpl, signal, timeoutMs }) {
         signal: ctrl.signal,
       });
       if (!res.ok) throw new Error(`Overpass svarade ${res.status}`);
-      return await res.json();
+      const json = await res.json();
+      // Overpass kan svara 200 med tom lista och en felnotering (t.ex. timeout).
+      // Ett sådant svar får inte sparas som "inga vägar här".
+      if (json.remark && /error|timed out|rate|out of memory/i.test(json.remark)) {
+        throw new Error('Overpass: ' + json.remark.slice(0, 80));
+      }
+      return json;
     } catch (e) {
       if (signal?.aborted) throw e;
       lastErr = e.name === 'AbortError' ? new Error('Overpass svarade inte i tid') : e;
@@ -137,7 +166,7 @@ async function overpassFetch(query, { fetchImpl, signal, timeoutMs }) {
  */
 export async function fetchOsmAlongRoute(route, {
   fetchImpl = fetch, signal, cache = null, onProgress = () => {},
-  cellsPerRequest = 24, concurrency = 2, timeoutMs = 25000,
+  cellsPerRequest = 12, concurrency = 2, timeoutMs = 30000,
 } = {}) {
   const cells = routeCells(route);
   const elements = new Map();
@@ -209,23 +238,23 @@ function segmentGrid(route, ways, cell = 50) {
  * föregående värde och korta avvikelser (< 40 m) tas bort.
  */
 export function assignLimits(route, elements) {
-  const ways = elements.filter(e => e.type === 'way' && e.tags && e.tags.maxspeed && parseMaxspeed(e.tags.maxspeed) != null);
+  const ways = elements.filter(e => e.type === 'way' && (wayLimit(e.tags, true) != null || wayLimit(e.tags, false) != null));
   const grid = segmentGrid(route, ways);
   const L = new Array(route.n).fill(null);
   for (let i = 0; i < route.n; i++) {
     let best = null;
     for (const seg of grid.near(route.X[i], route.Y[i])) {
-      if (angleDiff(seg.h, route.H[i]) > 35 && angleDiff(seg.h, route.H[i]) < 145) continue;
+      const diff = angleDiff(seg.h, route.H[i]);
+      if (diff > 45 && diff < 135) continue;
       const r = projectOnSegment(route.X[i], route.Y[i], seg.ax, seg.ay, seg.bx, seg.by);
-      if (r.d < 15 && (!best || r.d < best.d)) best = { d: r.d, w: seg.w };
+      if (r.d < 15 && (!best || r.d < best.d)) best = { d: r.d, w: seg.w, forward: diff <= 90 };
     }
-    if (best) {
-      const t = best.w.tags;
-      // Riktningsspecifika gränser om de finns.
-      L[i] = parseMaxspeed(t.maxspeed);
-    }
+    if (best) L[i] = wayLimit(best.w.tags, best.forward);
   }
-  return smoothLimits(fillGaps(L), Math.round(40 / route.step));
+  const found = L.filter(x => x != null).length;
+  const out = smoothLimits(fillGaps(L), Math.round(40 / route.step));
+  out.coverage = route.n ? found / route.n : 0;  // andel av rutten med känd gräns
+  return out;
 }
 
 function fillGaps(L) {
