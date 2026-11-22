@@ -181,8 +181,8 @@
     <div class="drive-target" id="d-target"></div>
     <div class="gmeter" id="d-gmeter" aria-label="Sidokraft">
       <div class="gm-row"><span class="gm-big" id="d-gnow">0,00 g</span><span id="d-gplan">rakt fram</span></div>
-      <div class="gm-track">
-        <span class="gm-zone" id="d-gzone"></span>
+      <div class="gm-track" aria-hidden="true">
+        <span class="seg r"></span><span class="seg y"></span><span class="seg g"></span><span class="seg y"></span><span class="seg r"></span>
         <span class="gm-center"></span>
         <span class="gm-ball" id="d-gball"></span>
       </div>
@@ -213,6 +213,7 @@
     </div>
     <div class="actions">
       <button class="btn primary" id="sum-done">Klar</button>
+      <button class="btn ghost" id="sum-copy">Kopiera körloggen för analys</button>
     </div>
   </section>
 
@@ -292,12 +293,31 @@
         <button class="btn small" id="set-tcalib-redo">Gör rullprov med släpet</button>
       </div>
 
+      <h2 class="section-title">Data</h2>
+      <div class="card">
+        <p>Varje körning och rullprov sparas som JSON i telefonen (de 10 senaste).</p>
+        <button class="btn small" id="set-logs">Visa körloggar</button>
+      </div>
+
       <h2 class="section-title">Övrigt</h2>
       <div class="card">
         <button class="btn small ghost" id="set-safety">Visa säkerhetsinformation</button>
         <button class="btn small ghost danger" id="set-reset">Radera allt i telefonen</button>
       </div>
       <p class="hint">Vägdata © OpenStreetMap-bidragsgivare. Rutter: openrouteservice (HeiGIT). Höjd: Open-Meteo.</p>
+    </div>
+  </section>
+
+  <!-- Körloggar -->
+  <section class="screen" id="logs" hidden>
+    <header class="bar"><button class="icon-btn back" data-back aria-label="Tillbaka">‹</button><h1>Körloggar</h1></header>
+    <div class="content">
+      <p class="hint">”Kopiera för analys” ger en kompakt JSON (en mätpunkt var 5:e sekund, alla händelser) som går att klistra in i en chatt. ”Spara fil” ger alla mätpunkter.</p>
+      <ul class="list logs" id="logs-list"></ul>
+      <div class="card" id="logs-text-card" hidden>
+        <p>Kopieringen gick inte automatiskt. Markera texten och kopiera:</p>
+        <textarea id="logs-text" class="json-box" readonly></textarea>
+      </div>
     </div>
   </section>
 

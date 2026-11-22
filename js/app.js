@@ -9,6 +9,15 @@ import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
 import { estimateTrailerModel, trailerLimits } from './trailer.js';
 import { LateralMeter, CurveTracker, learnALat, isStraightAt, routeYaw } from './lateral.js';
+import { DriveLog, makeLogStore } from './logbook.js';
+
+// Körloggar i telefonens lagring
+const safeStorage = {
+  getItem: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  setItem: (k, v) => localStorage.setItem(k, v),
+  removeItem: k => { try { localStorage.removeItem(k); } catch { /* blockerad */ } },
+};
+const logStore = makeLogStore(safeStorage);
 import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
 import { unlockAudio, sounds, speak } from './audio.js';
@@ -209,11 +218,13 @@ $('calib-start').addEventListener('click', async () => {
 
   const rec = new CoastRecorder(ev => onCalibEvent(rec, ev));
   calib.rec = rec;
+  calib.log = new DriveLog({ kind: 'calibration', run: n, trailer: trailerOn(), settings: { ...store.settings } });
   calib.stops.push(keepAwake());
   calib.stops.push(watchGps(obs => {
     calib.lastObs = obs;
     if (obs.speed != null) $('calib-speed').textContent = kmh(obs.speed);
     rec.addGps({ t: obs.t, v: obs.speed, lat: obs.lat, lon: obs.lon, alt: obs.alt, accuracy: obs.accuracy });
+    calib.log?.sample(obs.t, { lat: obs.lat, lon: obs.lon, kmh: obs.speed != null ? obs.speed * 3.6 : null, acc: obs.accuracy, mode: rec.state, alt: obs.alt });
     if (rec.state === 'waiting') {
       if (obs.accuracy > 20) calibState('Svag GPS-signal – vänta…', 'bad');
       else if (obs.speed == null) calibState('GPS ger ingen fart ännu – kör iväg.');
@@ -226,7 +237,19 @@ $('calib-start').addEventListener('click', async () => {
   calib.stops.push(watchMotion(m => { if (m.ax != null) rec.addMotion(m); }));
 });
 
+function calibLogEvent(type, data = {}) {
+  if (!calib.log) return;
+  calib.log.event(calib.lastObs?.t ?? Date.now() / 1000, type, data);
+}
+
+function saveCalibLog(result = {}) {
+  if (!calib.log) return;
+  calib.log.finish(result);
+  logStore.save(calib.log);
+}
+
 async function onCalibEvent(rec, ev) {
+  calibLogEvent(ev.type, ev.reason ? { reason: ev.reason } : {});
   if (ev.type === 'cue') {
     sounds.release();
     speak('Släpp gasen');
@@ -239,6 +262,7 @@ async function onCalibEvent(rec, ev) {
     sounds.warn();
     speak('Provet underkänt');
     showCalibResult(`<p class="result-line">Provet underkändes</p><p>${esc(ev.reason)}</p>`);
+    saveCalibLog({ ok: false, reason: ev.reason });
     renderCalibIdle();
     $('calib-start').textContent = `Gör om prov ${calib.runs.length + 1}`;
     return;
@@ -251,6 +275,13 @@ async function onCalibEvent(rec, ev) {
   let elev = null;
   try { elev = await elevations(gps.map(p => [p.lat, p.lon])); } catch { elev = null; }
   const res = analyzeRun(gps, elev);
+  const combinedNow = res.ok ? combineRuns([...calib.runs, res]) : null;
+  saveCalibLog({
+    ok: res.ok, reason: res.reason ?? null, gradePct: res.grade != null ? res.grade * 100 : null,
+    distanceM: res.distance ?? null, points: res.points?.length ?? 0, elevationSource: elev ? 'open-meteo' : 'gps',
+    A: combinedNow?.ok ? combinedNow.A : null, C: combinedNow?.ok ? combinedNow.C : null, r2: combinedNow?.ok ? combinedNow.r2 : null,
+    runsCombined: combinedNow?.ok ? combinedNow.runs : null,
+  });
   if (!res.ok) {
     showCalibResult(`<p class="result-line">Provet underkändes</p><p>${esc(res.reason)}</p>`);
     renderCalibIdle();
@@ -587,6 +618,15 @@ function startDrive() {
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
   drive.askQueue = [];
+  drive.log = new DriveLog({
+    kind: 'drive',
+    dest: plan.dest ? { name: plan.dest.name, lat: plan.dest.lat, lon: plan.dest.lon } : null,
+    demo: !!plan.demo, trailer: trailerOn(),
+    settings: { ...store.settings },
+    model: { ...model(), source: modelSource() },
+    route: routeMeta(plan),
+  });
+  drive.logSavedAt = Date.now();
   hideAsk();
   show('drive');
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
@@ -610,6 +650,29 @@ function startDrive() {
   }
   $('d-limit').classList.toggle('trailer', trailerOn());
   if (store.settings.voice && !drive.muted) speak(`${trailerOn() ? 'Släpvagnsläge. ' : ''}Kör försiktigt. Bromsen används alltid vid behov.`);
+}
+
+/** Ruttens fartmål och kurvor i loggen. */
+function routeMeta(p) {
+  const r1 = x => Math.round(x);
+  return {
+    lengthM: r1(p.route.length),
+    limitCoverage: p.coverage != null ? Math.round(p.coverage * 100) / 100 : null,
+    targets: p.targets.map(t => ({ s: r1(t.s), kmh: r1(t.v * 3.6), kind: t.kind })),
+    curves: (p.curves || []).map(c => ({ s: r1(c.s), sEnd: r1(c.sEnd), kmh: r1(c.v * 3.6), radiusM: r1(c.radius), dir: c.dir })),
+  };
+}
+
+function modelSource() {
+  if (trailerOn()) return store.calibrationTrailer ? 'rullprov med släp' : 'uppskattad från bilen';
+  return store.calibration ? 'rullprov' : 'typvärden';
+}
+
+function saveDriveLog(stats = null) {
+  if (!drive.log) return;
+  if (stats) drive.log.finish({ ...stats, curves: (drive.curveLog || []).length });
+  logStore.save(drive.log);
+  drive.logSavedAt = Date.now();
 }
 
 function stopDrive() {
@@ -652,15 +715,17 @@ function renderGMeter() {
     ? (tr.active.curve.v ** 2) / tr.active.curve.radius / 9.81
     : planSettings().aLat / 9.81;
   const { g, side } = drive.meter.current();
-  const range = Math.max(0.5, planned * 1.4);            // ± fullt utslag i g
-  const pos = 50 + Math.max(-1, Math.min(1, side / range)) * 46;
+  // Skalan går till 200 % av planerat åt varje håll: grönt ≤ 100 %, gult ≤ 150 %, rött därefter
+  const range = planned * 2;
+  const pos = 50 + Math.max(-1, Math.min(1, side / range)) * 47;
   $('d-gball').style.left = `${pos}%`;
-  $('d-gzone').style.width = `${Math.min(100, (planned / range) * 100)}%`;
-  $('d-gnow').textContent = fmtG(g);
+  const zone = g <= planned ? 'green' : g <= planned * 1.5 ? 'yellow' : 'red';
+  const big = $('d-gnow');
+  big.textContent = fmtG(g);
+  big.className = 'gm-big ' + zone;
   $('d-gplan').textContent = inCurve
     ? `planerat ${fmtG(planned)}`
-    : (g < 0.03 ? 'rakt fram' : `komfort ${fmtG(planned)}`);
-  el.classList.toggle('over', g > planned * 1.15);
+    : (g < 0.03 ? `rakt fram · komfort ${fmtG(planned)}` : `komfort ${fmtG(planned)}`);
 }
 
 const fmtG = g => `${g.toFixed(2).replace('.', ',')} g`;
@@ -674,6 +739,11 @@ function trackCurves(view, obs) {
     if (ev.type === 'exit') {
       const rec = { ...ev.record, answer: null, trailer: trailerOn() };
       drive.curveLog.push(rec);
+      drive.log?.event(obs.t, 'curve', {
+        s: rec.s, dir: rec.dir, radiusM: rec.radius, radiusMeasM: rec.radiusMeas,
+        plannedKmh: rec.plannedV * 3.6, maxKmh: rec.maxV * 3.6, plannedG: rec.plannedG, peakG: rec.peakG,
+        gyroTurnDeg: rec.gyroTurn, routeTurnDeg: rec.routeTurn, valid: rec.valid, reason: rec.reason, ask: rec.ask,
+      });
       if (rec.ask && store.settings.askCurvesInDrive) drive.askQueue.push(rec);
     }
   }
@@ -726,7 +796,12 @@ function answerCurve(rec, answer) {
     date: new Date().toISOString(), answer, peakG: rec.peakG, plannedG: rec.plannedG,
     speed: rec.speedAtPeak, radius: rec.radius, trailer: rec.trailer,
   }];
-  if (!st.learnCurves) return;
+  const logAnswer = extra => {
+    if (!drive.log) return;
+    drive.log.event(drive.lastObs?.t ?? Date.now() / 1000, 'answer', { curveS: rec.s, answer, peakG: rec.peakG, plannedG: rec.plannedG, ...extra });
+    if (!drive.engine) saveDriveLog(); // efter resan: spara direkt
+  };
+  if (!st.learnCurves) { logAnswer({ learned: false }); return; }
   const key = rec.trailer ? 'trailerALat' : 'aLat';
   const bounds = rec.trailer ? { min: 0.10 * 9.81, max: 0.30 * 9.81 } : { min: 0.15 * 9.81, max: 0.35 * 9.81 };
   const before = st[key];
@@ -734,6 +809,7 @@ function answerCurve(rec, answer) {
   const counts = store.curveLearn;
   counts[rec.trailer ? 'trailer' : 'car'] = (counts[rec.trailer ? 'trailer' : 'car'] || 0) + 1;
   store.curveLearn = counts;
+  logAnswer({ aLatBeforeG: before / 9.81, aLatAfterG: after / 9.81 });
   if (Math.abs(after - before) < 0.001) return;
   store.settings = { ...store.settings, [key]: after };
   toast(`Sidokraft i kurvor: ${fmtG(after / 9.81)} (var ${fmtG(before / 9.81)}).`);
@@ -756,8 +832,30 @@ function onDriveObs(obs) {
   const { view, events } = drive.engine.update(obs);
   const arrived = events.some(e => e.type === 'arrived');
   if (!arrived) trackCurves(view, obs);
+  logDrive(view, obs, events);
   for (const ev of events) handleDriveEvent(ev, obs);
   if (drive.engine) renderDrive(view, obs);
+}
+
+function logDrive(view, obs, events) {
+  const L = drive.log;
+  if (!L) return;
+  const i = Math.min(plan.route.n - 1, Math.max(0, Math.round((view.s || 0) / plan.route.step)));
+  const m = drive.meter ? drive.meter.current() : null;
+  L.sample(obs.t, {
+    s: view.s, lat: obs.lat, lon: obs.lon, kmh: (obs.speed ?? view.v ?? 0) * 3.6, acc: obs.accuracy,
+    mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, rel: view.distToRelease, alt: obs.alt,
+  });
+  for (const ev of events) {
+    const tg = ev.target;
+    const at = { s: view.s, kmh: (view.v || 0) * 3.6 };
+    if (ev.type === 'release') L.event(obs.t, 'release', { ...at, kind: tg.kind, targetS: tg.s, targetKmh: tg.v * 3.6, late: ev.late, brakeNeeded: ev.brakeNeeded });
+    else if (ev.type === 'follow') L.event(obs.t, 'follow', { followed: ev.followed, kind: tg?.kind, targetS: tg?.s, afterS: ev.afterS ?? null });
+    else if (ev.type === 'reached') L.event(obs.t, 'reached', { ...at, kind: tg.kind, targetS: tg.s, targetKmh: tg.v * 3.6 });
+    else if (ev.type === 'pause') L.event(obs.t, 'pause', { ...at, reason: ev.reason, acc: obs.accuracy });
+    else if (ev.type === 'resume' || ev.type === 'offroute') L.event(obs.t, ev.type, at);
+  }
+  if (Date.now() - drive.logSavedAt > 30000) saveDriveLog();
 }
 
 function say(text) {
@@ -788,6 +886,8 @@ function handleDriveEvent(ev, obs) {
     case 'arrived':
       if (!drive.muted) sounds.done();
       say('Framme');
+      drive.log?.event(obs.t, 'arrived', { s: drive.engine.s });
+      saveDriveLog(ev.stats);
       stopDrive();
       showSummary(ev.stats);
       drive.engine = null;
@@ -808,6 +908,8 @@ async function reroute(obs) {
     plan = { ...plan, ...p, duration: r.duration };
     drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: store.settings.marginS });
     drive.engine.stats = stats;
+    drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
+    drive.log?.event(obs.t, 'reroute', { lat: obs.lat, lon: obs.lon, route: routeMeta(plan) });
     if (!drive.muted) sounds.resume();
     say('Ny rutt');
   } catch (e) {
@@ -915,6 +1017,7 @@ $('d-sound').addEventListener('click', () => {
 });
 $('d-stop').addEventListener('click', () => {
   const stats = drive.engine ? { ...drive.engine.stats, endT: drive.lastObs?.t ?? null } : null;
+  if (stats) { drive.log?.event(drive.lastObs?.t ?? Date.now() / 1000, 'stopped', { s: drive.engine.s }); saveDriveLog(stats); }
   stopDrive();
   drive.engine = null;
   if (stats && (stats.signals > 0 || (drive.curveLog || []).length)) showSummary(stats);
@@ -941,6 +1044,10 @@ function showSummary(st) {
   stack.push('home');
   show('summary');
 }
+$('sum-copy').addEventListener('click', () => {
+  if (drive.log) copyLog(drive.log);
+});
+
 function renderCurveSummary() {
   const log = drive.curveLog || [];
   $('sum-curves-title').hidden = !log.length;
@@ -1035,6 +1142,81 @@ $('set-learn-reset').addEventListener('click', () => {
   enterSettings();
   toast('Sidokraften är återställd till 0,25 g (släp 0,18 g).');
 });
+
+$('set-logs').addEventListener('click', () => show('logs'));
+
+function enterLogs() {
+  $('logs-text-card').hidden = true;
+  const ul = $('logs-list');
+  ul.innerHTML = '';
+  const list = logStore.list();
+  if (!list.length) { ul.innerHTML = '<li><span class="pick">Inga loggar ännu. De sparas när du kör eller gör ett rullprov.</span></li>'; return; }
+  for (const e of list) {
+    const li = document.createElement('li');
+    const when = new Date(e.startedAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
+    const dist = e.kind === 'calibration' ? '' : (e.distanceM ? ` · ${fmtDist(e.distanceM)}` : '');
+    li.innerHTML = `<span class="log-title">${esc(e.title)}</span>
+      <span class="log-meta">${esc(when)}${esc(dist)} · ${e.samples} mätpunkter · ${e.events} händelser</span>
+      <span class="log-btns">
+        <button class="btn small primary" data-a="copy">Kopiera för analys</button>
+        <button class="btn small" data-a="file">Spara fil</button>
+        ${navigator.canShare ? '<button class="btn small" data-a="share">Dela</button>' : ''}
+        <button class="btn small ghost danger" data-a="del">Radera</button>
+      </span>`;
+    li.querySelectorAll('button[data-a]').forEach(b => b.addEventListener('click', async () => {
+      const log = logStore.load(e.id);
+      if (!log) { toast('Loggen gick inte att läsa.', true); return; }
+      const a = b.dataset.a;
+      if (a === 'copy') copyLog(log);
+      if (a === 'file') downloadLog(log);
+      if (a === 'share') shareLog(log);
+      if (a === 'del') {
+        if (b.dataset.sure) { logStore.remove(e.id); enterLogs(); }
+        else { b.dataset.sure = '1'; b.textContent = 'Tryck igen för att radera'; }
+      }
+    }));
+    ul.appendChild(li);
+  }
+}
+screens.logs = enterLogs;
+
+async function copyLog(log) {
+  const text = JSON.stringify(log.toJSON());
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`Kopierat (${Math.round(text.length / 1024)} kB). Klistra in i chatten.`);
+  } catch {
+    // Reserv: visa texten markerad så att den går att kopiera för hand
+    if ($('logs').hidden) show('logs');
+    $('logs-text-card').hidden = false;
+    const ta = $('logs-text');
+    ta.value = text;
+    ta.focus();
+    ta.select();
+  }
+}
+
+function logFile(log) {
+  const text = JSON.stringify(log.toJSON({ full: true }), null, 1);
+  return new File([text], `${log.id}.json`, { type: 'application/json' });
+}
+
+function downloadLog(log) {
+  const f = logFile(log);
+  const url = URL.createObjectURL(f);
+  const a = document.createElement('a');
+  a.href = url; a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function shareLog(log) {
+  const f = logFile(log);
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: 'Körlogg' });
+    else downloadLog(log);
+  } catch (e) { if (e.name !== 'AbortError') downloadLog(log); }
+}
 
 $('set-trailer').addEventListener('change', e => { setTrailer(e.target.checked); });
 $('set-tcalib-redo').addEventListener('click', () => {

@@ -1,0 +1,71 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DriveLog, makeLogStore, SAMPLE_FIELDS } from '../js/logbook.js';
+
+function memStorage(limitBytes = Infinity) {
+  const m = new Map();
+  const size = () => [...m.values()].reduce((a, v) => a + v.length, 0);
+  return {
+    getItem: k => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { const old = m.get(k) || ''; if (size() - old.length + v.length > limitBytes) throw new Error('QuotaExceeded'); m.set(k, v); },
+    removeItem: k => m.delete(k),
+    map: m,
+  };
+}
+
+function hourLog() {
+  const l = new DriveLog({ kind: 'drive', dest: { name: 'Test' } }, 1_700_000_000_000);
+  for (let t = 0; t < 3600; t++) {
+    l.sample(1000 + t, { s: t * 20, lat: 57.7 + t * 1e-5, lon: 11.9, kmh: 72.3, acc: 4, mode: 'free', limit: 70, g: 0.123456, side: -0.1, rel: null });
+    if (t % 120 === 0) l.event(1000 + t, 'release', { kind: 'traffic_signals', targetS: t * 20 + 400, late: false });
+  }
+  l.finish({ signals: 30, followed: 28, distance: 72000 });
+  return l;
+}
+
+test('kompakt logg är liten nog att klistra in', () => {
+  const l = hourLog();
+  const compact = JSON.stringify(l.toJSON());
+  const full = JSON.stringify(l.toJSON({ full: true }));
+  assert.ok(compact.length < 60000, `kompakt ${compact.length} B`);
+  assert.ok(full.length > compact.length * 3);
+  const j = JSON.parse(compact);
+  assert.deepEqual(j.samples.fields, SAMPLE_FIELDS);
+  assert.equal(j.events.length, 30);
+  assert.equal(j.samples.rows[0][0], 0);              // tid från start
+  assert.equal(j.samples.rows[0][8], 0.123);           // avrundad sidokraft
+});
+
+test('högst en mätpunkt per sekund', () => {
+  const l = new DriveLog({ kind: 'drive' });
+  for (let i = 0; i < 100; i++) l.sample(i * 0.25, { s: i });
+  assert.equal(l.rows.length, 25);
+});
+
+test('lagring: spara, lista, läsa, radera och rensa äldsta när det är fullt', () => {
+  const st = memStorage(400_000);
+  const store = makeLogStore(st, { max: 3 });
+  const logs = [];
+  for (let i = 0; i < 5; i++) {
+    const l = new DriveLog({ kind: 'drive', dest: { name: `Resa ${i}` } }, 1_700_000_000_000 + i * 1000);
+    for (let t = 0; t < 300; t++) l.sample(t, { s: t, kmh: 50 });
+    l.finish({ distance: 300 });
+    assert.equal(store.save(l), true);
+    logs.push(l);
+  }
+  const list = store.list();
+  assert.equal(list.length, 3);
+  assert.equal(list[0].title, 'Resa 4');               // nyast först
+  const back = store.load(list[0].id);
+  assert.equal(back.rows.length, 300);
+  store.remove(list[0].id);
+  assert.equal(store.list().length, 2);
+
+  // Litet utrymme: äldsta loggar får ge plats
+  const tiny = makeLogStore(memStorage(1_200_000), { max: 10 });
+  for (let i = 0; i < 6; i++) {
+    const l = hourLog(); l.id += i; l.startedAt += i;
+    assert.equal(tiny.save(l), true, `logg ${i}`);
+  }
+  assert.ok(tiny.list().length < 6);
+});

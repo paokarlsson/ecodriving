@@ -16,6 +16,8 @@
   --approach: #d97706;
   --release: #0b6bcb;
   --paused: #8a948e;
+  --zone-green: #1f9d5c;
+  --zone-yellow: #a87c00;
   --radius: 14px;
   color-scheme: light;
 }
@@ -25,6 +27,7 @@
     --accent: #3fb47a; --accent-fg: #06110b; --warn-bg: #2b2412; --warn-line: #6b5520;
     --route: #c9d2cc; --route-done: #46524b; --ring-bg: #222b26;
     --free: #3fb47a; --approach: #f59e0b; --release: #4ba3ff; --paused: #6b756f;
+    --zone-green: #2fb36d; --zone-yellow: #f2c230;
     color-scheme: dark;
   }
 }
@@ -33,6 +36,7 @@
   --accent: #3fb47a; --accent-fg: #06110b; --warn-bg: #2b2412; --warn-line: #6b5520;
   --route: #c9d2cc; --route-done: #46524b; --ring-bg: #222b26;
   --free: #3fb47a; --approach: #f59e0b; --release: #4ba3ff; --paused: #6b756f;
+  --zone-green: #2fb36d; --zone-yellow: #f2c230;
   color-scheme: dark;
 }
 
@@ -226,22 +230,29 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 }
 .gm-row { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: 0.85rem; font-weight: 600; }
 .gm-big { font-size: 1.4rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--fg); }
-.gmeter.over .gm-big { color: var(--danger); }
-/* Bollen: mitten = rakt fram, ut åt det håll kraften trycker föraren */
-.gm-track { position: relative; height: 30px; border-radius: 15px; background: var(--ring-bg); overflow: hidden; }
-.gm-zone {
-  position: absolute; top: 0; bottom: 0; left: 50%; width: 0; transform: translateX(-50%);
-  background: color-mix(in srgb, var(--free) 22%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--free) 60%, transparent);
-  border-right: 2px solid color-mix(in srgb, var(--free) 60%, transparent);
-}
-.gm-center { position: absolute; top: 4px; bottom: 4px; left: 50%; width: 2px; margin-left: -1px; background: var(--muted); opacity: 0.6; }
+/* Skalan: grönt = upp till planerat, gult = upp till 150 %, rött längst ut.
+   Bollen: mitten = rakt fram, ut åt det håll kraften trycker föraren. */
+.gm-track { position: relative; height: 30px; border-radius: 15px; overflow: hidden; display: flex; }
+.gm-track .seg { height: 100%; }
+.gm-track .seg.r { width: 12.5%; background: #e5484d; }
+.gm-track .seg.y { width: 12.5%; background: #f2c230; }
+.gm-track .seg.g { width: 50%; background: #2fb36d; }
+.gm-center { position: absolute; top: 5px; bottom: 5px; left: 50%; width: 2px; margin-left: -1px; background: rgba(0,0,0,0.35); }
 .gm-ball {
   position: absolute; top: 3px; width: 24px; height: 24px; margin-left: -12px; left: 50%;
-  border-radius: 50%; background: var(--release); box-shadow: 0 1px 4px rgba(0,0,0,0.35);
-  transition: left 0.15s linear, background 0.2s;
+  border-radius: 50%; background: #fff; border: 3px solid #0a0f0c; box-shadow: 0 1px 5px rgba(0,0,0,0.5);
+  transition: left 0.15s linear;
 }
-.gmeter.over .gm-ball { background: var(--danger); }
+/* Siffran i zonens färg; gult text mörkare i ljust läge för att gå att läsa */
+.gm-big.green { color: var(--zone-green); }
+.gm-big.yellow { color: var(--zone-yellow); }
+.gm-big.red { color: var(--danger); }
+/* Körloggar */
+.list.logs li { flex-wrap: wrap; padding: 12px 14px; gap: 8px; }
+.log-title { font-weight: 700; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.log-meta { color: var(--muted); font-size: 0.88rem; width: 100%; font-variant-numeric: tabular-nums; }
+.log-btns { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.json-box { width: 100%; min-height: 160px; font: 12px/1.4 ui-monospace, Menlo, monospace; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 8px; }
 @media (prefers-reduced-motion: reduce) { .gm-ball { transition: none; } }
 .ask-card {
   position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 5;

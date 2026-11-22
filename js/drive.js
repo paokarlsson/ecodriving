@@ -76,8 +76,14 @@ export class DriveEngine {
     // 3. Uppföljning: släppte föraren gasen?
     for (const p of this.pending) {
       p.minV = Math.min(p.minV, v);
-      if (!p.done && p.v0 - p.minV >= DRIVE.followDrop) { p.done = true; p.followed = true; this.stats.followed++; }
-      if (!p.done && t > p.t0 + this.marginS + DRIVE.followWindow) { p.done = true; p.followed = false; }
+      if (!p.done && p.v0 - p.minV >= DRIVE.followDrop) {
+        p.done = true; p.followed = true; this.stats.followed++;
+        events.push({ type: 'follow', followed: true, target: p.target, afterS: t - p.t0 });
+      }
+      if (!p.done && t > p.t0 + this.marginS + DRIVE.followWindow) {
+        p.done = true; p.followed = false;
+        events.push({ type: 'follow', followed: false, target: p.target });
+      }
     }
     this.pending = this.pending.filter(p => !p.done);
 
@@ -128,7 +134,7 @@ export class DriveEngine {
       if (late) this.stats.late++;
       if (best.rp.brakeNeeded) this.stats.brakeWarnings++;
       events.push({ type: 'release', target: best.target, late, brakeNeeded: best.rp.brakeNeeded });
-      this.pending.push({ t0: t, v0: v, minV: v, done: false });
+      this.pending.push({ t0: t, v0: v, minV: v, done: false, target: best.target });
       this.coast = { target: best.target, t0: t, minV: v, brakeNeeded: best.rp.brakeNeeded };
       return { view: this.view('coasting', { target: best.target, distToTarget: best.target.s - s, brakeNeeded: best.rp.brakeNeeded, justReleased: true }), events };
     }

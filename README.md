@@ -31,6 +31,17 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar. Bil och släp lär sig var för sig.
 - Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
 
+## Körlogg (JSON)
+
+Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställningar → Data → *Visa körloggar*, eller från sammanfattningen:
+
+- **Kopiera för analys**: kompakt JSON, en mätpunkt var 5:e sekund och alla händelser (ca 40 kB per timme), att klistra in i en chatt.
+- **Spara fil / Dela**: samma sak med alla mätpunkter (en per sekund).
+
+Innehåll: `kind` (`drive` | `calibration`), `dest`, `trailer`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
+`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
+Händelser: `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `answer`, `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
+
 ## Utveckling
 
 Ingen byggprocess – rena ES-moduler.
@@ -50,6 +61,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/api.js` | OpenRouteService (rutt, geokodning) och Open-Meteo (höjd) |
 | `js/sensors.js`, `js/audio.js`, `js/mapview.js` | Webbläsarens sensorer, ljud/röst, karta på canvas |
 | `js/app.js` | Vyer och flöden |
+| `js/logbook.js` | Körlogg som JSON och lagring av de senaste loggarna |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/trailer.js` | Släpvagnsläge: maxfart och uppskattad rullmodell |
 | `js/demo.js`, `js/sim.js` | Syntetisk demorutt och simulerad bil |
