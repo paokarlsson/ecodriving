@@ -23,8 +23,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   giveWayKmh: 20,
   roundaboutKmh: 25,
   trailer: false,      // släpvagnsläge: högst 80 km/h
-  learnCurves: true,      // låt svar om kurvkraft justera sidokraften
-  askCurvesInDrive: true, // fråga direkt efter kurvan (annars i sammanfattningen)
   learnCoast: true,       // förfina rullmodellen av rullningar under körning
 });
 
@@ -35,12 +33,6 @@ export const store = {
   set calibration(v) { set('calibration', v); },
   get settings() { return { ...DEFAULT_SETTINGS, ...(get('settings') || {}) }; },
   set settings(v) { set('settings', v); },
-  /** Antal svar som justerat sidokraften: {car}. */
-  get curveLearn() { return get('curveLearn', { car: 0 }); },
-  set curveLearn(v) { set('curveLearn', v); },
-  /** De senaste svaren om kurvkraft (högst 200). */
-  get curveAnswers() { return get('curveAnswers', []); },
-  set curveAnswers(v) { set('curveAnswers', (v || []).slice(-200)); },
   /** Pågående resa, så att den överlever en omladdning: {dest, demo, stage, at}. */
   get lastTrip() { return get('lastTrip'); },
   set lastTrip(v) { set('lastTrip', v); },

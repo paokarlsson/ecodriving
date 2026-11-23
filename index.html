@@ -193,15 +193,6 @@
         <span class="gm-ball" id="d-gball"></span>
       </div>
     </div>
-    <div class="ask-card" id="d-ask" hidden role="dialog" aria-labelledby="d-ask-q">
-      <div class="ask-q" id="d-ask-q">Kurvan tog 0,31 g. Var det okej?</div>
-      <div class="ask-m" id="d-ask-m"></div>
-      <div class="ask-btns">
-        <button class="btn primary" id="d-ask-ok">Okej</button>
-        <button class="btn danger-fill" id="d-ask-no">För mycket</button>
-      </div>
-      <div class="ask-timer"><i id="d-ask-timer"></i></div>
-    </div>
     <canvas id="d-map" class="map drive-map" aria-hidden="true"></canvas>
     <div class="actions drive-actions">
       <button class="btn ghost" id="d-stop">Avsluta</button>
@@ -278,19 +269,6 @@
           <input type="range" id="set-rb" min="15" max="40" step="5">
         </label>
         <button class="btn small ghost" id="set-test-sound">Testa ljud</button>
-      </div>
-
-      <h2 class="section-title">Kurvkraft</h2>
-      <div class="card">
-        <p id="set-learn-show">Sidokraft 0,25 g.</p>
-        <label class="field check">
-          <input type="checkbox" id="set-learn"> <span>Lär av mina svar</span>
-        </label>
-        <label class="field check">
-          <input type="checkbox" id="set-ask"> <span>Fråga direkt efter kurvan</span>
-        </label>
-        <small class="hint">Gyrot mäter sidokraften i varje kurva. Var den mer än 15 % över planerat frågar appen om det var okej. Av = frågorna ställs i sammanfattningen.</small>
-        <div class="row" style="margin-top:10px"><button class="btn small ghost danger" id="set-learn-reset">Återställ inlärd sidokraft</button></div>
       </div>
 
       <h2 class="section-title">Släpvagn</h2>

@@ -29,8 +29,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 ## Uppmätt kurvkraft (gyro)
 
 - Gyrot mäter bilens vridhastighet kring lodlinjen (oberoende av hur telefonen sitter); sidokraften är `a = v · ω` med farten från GPS.
-- Under kurvan visas en mätare med uppmätt mot planerad sidokraft. Var toppen mer än 15 % över planerat frågar appen efter kurvan, på rak väg: *Okej* eller *För mycket*. Obesvarade frågor finns i sammanfattningen.
-- Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar.
+- Under kurvan visas en mätare med uppmätt mot planerad sidokraft. Sammanfattningen visar varje kurva och markerar dem där toppen var mer än 15 % över planerat. Appen ställer inga frågor och sidokraften ändras bara i Inställningar.
 - Telefoner anger gyrots axlar, enheter och tecken olika (en inspelning visade en webbläsare som lade x-rotationen i `alpha`). Appen lär sig därför vilken kombination av gyrots tre axlar som är "sväng": gyrots vridning summeras mellan två GPS-positioner och jämförs med GPS-kursens ändring (eller ruttens, om kursen saknas) över samma tid, med minsta kvadrat över intervallen. Det kräver ungefär en minuts körning med några svängar och sparas till nästa körning. Att jämföra mätvärde för mätvärde fungerar inte, eftersom GPS-kursen kommer en gång i sekunden och ligger efter. Stötar över ca 70°/s ignoreras.
 - Accelerometern (med tyngdkraft, tyngdkraften utjämnad över 20 s) ger en kontroll: i tydliga kurvor ska den visa ungefär samma sidokraft som gyrot. Skiljer de sig mer än en faktor 2–2,5 i fem kurvor varnar appen för lös hållare. Accelerometerns topp per kurva loggas (`accPeakG`).
 - Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
@@ -50,7 +49,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `trailer`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
 `samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
-Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `answer`, `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
+Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Demorutter
 

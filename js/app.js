@@ -9,7 +9,7 @@ import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './
 import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
 import { trailerLimits, TRAILER_MAX_KMH } from './trailer.js';
-import { LateralMeter, CurveTracker, learnALat, isStraightAt, routeYaw } from './lateral.js';
+import { LateralMeter, CurveTracker, isStraightAt, routeYaw } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
 import { RawRecorder, readRaw, deleteRaw, persistStorage } from './rawstore.js';
 import { CoastLearner, CoastStats, acceptSegment } from './coastlearn.js';
@@ -687,7 +687,6 @@ function startDrive() {
   if (ga && ga.method === 'interval' && Array.isArray(ga.axis) && !plan.demo) { drive.meter.axis = ga.axis; drive.meter.axisR2 = ga.r2; }
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
-  drive.askQueue = [];
   drive.coast = new CoastLearner(model());
   drive.coastFound = 0;
   drive.coastUsed = 0;
@@ -705,7 +704,6 @@ function startDrive() {
   drive.logSavedAt = Date.now();
   drive.raw = plan.demo ? null : new RawRecorder(drive.log.id);
   if (drive.raw) { persistStorage(); recordApi(); }
-  hideAsk();
   show('drive');
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
   drive.stops.push(keepAwake());
@@ -827,7 +825,6 @@ function stopDrive() {
   drive.stops.forEach(f => f());
   drive.stops = [];
   drive.sim = null;
-  hideAsk();
 }
 
 // ---------- Kurvkraft ----------
@@ -915,19 +912,17 @@ function trackCurves(view, obs) {
   drive.meter.setStraight(v < 0.5 || isStraightAt(plan.route, s));
   for (const ev of drive.tracker.update(s, obs.t, v, drive.meter)) {
     if (ev.type === 'exit') {
-      const rec = { ...ev.record, answer: null, trailer: trailerOn() };
+      const rec = { ...ev.record, trailer: trailerOn() };
       drive.curveLog.push(rec);
       drive.log?.event(obs.t, 'curve', {
         s: rec.s, dir: rec.dir, radiusM: rec.radius, radiusMeasM: rec.radiusMeas, accPeakG: rec.accPeakG,
         plannedKmh: rec.plannedV * 3.6, maxKmh: rec.maxV * 3.6, plannedG: rec.plannedG, peakG: rec.peakG,
         gyroTurnDeg: rec.gyroTurn, routeTurnDeg: rec.routeTurn, valid: rec.valid, reason: rec.reason, ask: rec.ask,
       });
-      if (rec.ask && store.settings.askCurvesInDrive) drive.askQueue.push(rec);
       checkGyroAgainstAccel(rec);
     }
   }
   renderGMeter();
-  maybeAsk(view);
 }
 
 /**
@@ -949,81 +944,6 @@ function checkGyroAgainstAccel(rec) {
       ? 'Gyrot visar mycket mindre än accelerometern i kurvorna. Sitter telefonen fast i hållaren?'
       : 'Accelerometern visar mycket mindre än gyrot. Sitter telefonen fast i hållaren?', true, 7000);
   }
-}
-
-let askTimer = null;
-/** Frågan visas bara på rak väg, inte nära en kurva eller en släpp-signal. */
-function maybeAsk(view) {
-  if (!$('d-ask').hidden || !drive.askQueue.length) return;
-  const s = view.s || 0;
-  if (drive.tracker.inside()) return;
-  if ((plan.curves || []).some(c => c.s > s && c.s - s < 150)) return;
-  if (view.distToRelease != null && view.distToRelease < 300) return;
-  if (Date.now() < drive.flashUntil) return;
-  showAsk(drive.askQueue.shift());
-}
-
-function showAsk(rec) {
-  drive.asking = rec;
-  $('d-ask-q').textContent = `Kurvan tog ${fmtG(rec.peakG)}. Var det okej?`;
-  $('d-ask-m').textContent = `planerat ${fmtG(rec.plannedG)} · ${kmh(rec.maxV)} km/h i ${kmh(rec.plannedV)}-kurva`;
-  $('d-ask').hidden = false;
-  const bar = $('d-ask-timer');
-  bar.style.transition = 'none';
-  bar.style.width = '100%';
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    bar.style.transition = 'width 10s linear';
-    bar.style.width = '0%';
-  }));
-  clearTimeout(askTimer);
-  askTimer = setTimeout(hideAsk, 10000);
-}
-
-function hideAsk() {
-  clearTimeout(askTimer);
-  $('d-ask').hidden = true;
-  drive.asking = null;
-}
-
-$('d-ask-ok').addEventListener('click', () => { if (drive.asking) answerCurve(drive.asking, 'ok'); hideAsk(); });
-$('d-ask-no').addEventListener('click', () => { if (drive.asking) answerCurve(drive.asking, 'too_much'); hideAsk(); });
-
-/** Sparar svaret och justerar sidokraften (om inlärning är på). */
-function answerCurve(rec, answer) {
-  rec.answer = answer;
-  const st = store.settings;
-  store.curveAnswers = [...store.curveAnswers, {
-    date: new Date().toISOString(), answer, peakG: rec.peakG, plannedG: rec.plannedG,
-    speed: rec.speedAtPeak, radius: rec.radius, trailer: rec.trailer,
-  }];
-  const logAnswer = extra => {
-    if (!drive.log) return;
-    drive.log.event(drive.lastObs?.t ?? Date.now() / 1000, 'answer', { curveS: rec.s, answer, peakG: rec.peakG, plannedG: rec.plannedG, ...extra });
-    if (!drive.engine) saveDriveLog(); // efter resan: spara direkt
-  };
-  if (!st.learnCurves) { logAnswer({ learned: false }); return; }
-  const key = 'aLat';
-  const bounds = { min: 0.15 * 9.81, max: 0.35 * 9.81 };
-  const before = st[key];
-  const after = Math.round(learnALat(before, rec, answer, bounds) * 1000) / 1000;
-  const counts = store.curveLearn;
-  counts.car = (counts.car || 0) + 1;
-  store.curveLearn = counts;
-  logAnswer({ aLatBeforeG: before / 9.81, aLatAfterG: after / 9.81 });
-  if (Math.abs(after - before) < 0.001) return;
-  store.settings = { ...store.settings, [key]: after };
-  toast(`Sidokraft i kurvor: ${fmtG(after / 9.81)} (var ${fmtG(before / 9.81)}).`);
-  // Gäller resten av resan om den pågår
-  if (plan && drive.engine) applyNewCurveSpeeds();
-}
-
-function applyNewCurveSpeeds() {
-  const eng = drive.engine;
-  plan = computeTargets(plan);
-  const passed = (eng.coast ? eng.coast.target.s : eng.s) + 1;
-  eng.targets = plan.targets;
-  eng.fired = new Set(plan.targets.filter(t => t.s <= passed).map(t => t.id));
-  drive.tracker.setCurves(plan.curves, planSettings().aLat);
 }
 
 function onDriveObs(obs) {
@@ -1086,7 +1006,6 @@ function say(text) {
 function handleDriveEvent(ev, obs) {
   switch (ev.type) {
     case 'release':
-      hideAsk(); // signalen går före; frågan finns kvar i sammanfattningen
       if (!drive.muted) { ev.brakeNeeded ? sounds.warn() : sounds.release(); }
       setTimeout(() => say(releaseMessage(ev)), 550);
       drive.flashUntil = Date.now() + 2500;
@@ -1294,16 +1213,10 @@ function renderCurveSummary() {
     const meta = rec.valid
       ? `${fmtG(rec.peakG)} · planerat ${fmtG(rec.plannedG)} · högst ${kmh(rec.maxV)} km/h`
       : `Inte mätt: ${rec.reason}`;
-    let right;
-    if (rec.answer === 'ok') right = '<span class="curve-chip ok">Okej</span>';
-    else if (rec.answer === 'too_much') right = '<span class="curve-chip over">För mycket</span>';
-    else if (rec.ask) right = '<span class="curve-answer"><button class="btn small" data-a="ok">Okej</button><button class="btn small danger-fill" data-a="too_much">För mycket</button></span>';
-    else right = `<span class="curve-chip">${rec.valid ? 'inom planerat' : '–'}</span>`;
+    const right = rec.ask
+      ? '<span class="curve-chip over">över planerat</span>'
+      : `<span class="curve-chip">${rec.valid ? 'inom planerat' : '–'}</span>`;
     li.innerHTML = `<span class="curve-name">${esc(name)}</span>${right}<span class="curve-meta">${esc(meta)}</span>`;
-    li.querySelectorAll('button[data-a]').forEach(b => b.addEventListener('click', () => {
-      answerCurve(rec, b.dataset.a);
-      renderCurveSummary();
-    }));
     ul.appendChild(li);
   }
 }
@@ -1330,9 +1243,6 @@ function enterSettings() {
   bindRange('set-rb', 'roundaboutKmh', v => `${v} km/h`, s);
   $('set-voice').checked = s.voice;
   $('set-trailer').checked = s.trailer;
-  $('set-learn').checked = s.learnCurves;
-  $('set-ask').checked = s.askCurvesInDrive;
-  renderLearnShow();
 }
 /** Komfort i kurvor visas i g men sparas som m/s². */
 function bindGForce(s, id, key) {
@@ -1359,19 +1269,6 @@ function bindRange(id, key, fmt, s) {
   };
 }
 $('set-voice').addEventListener('change', e => { store.settings = { ...store.settings, voice: e.target.checked }; });
-function renderLearnShow() {
-  const s = store.settings, n = store.curveLearn;
-  $('set-learn-show').textContent = `${fmtG(s.aLat / 9.81)}${n.car ? ` · inlärd från ${n.car} svar` : ''}.`;
-}
-$('set-learn').addEventListener('change', e => { store.settings = { ...store.settings, learnCurves: e.target.checked }; });
-$('set-ask').addEventListener('change', e => { store.settings = { ...store.settings, askCurvesInDrive: e.target.checked }; });
-$('set-learn-reset').addEventListener('click', () => {
-  store.settings = { ...store.settings, aLat: DEFAULT_SETTINGS.aLat };
-  store.curveLearn = { car: 0 };
-  store.curveAnswers = [];
-  enterSettings();
-  toast('Sidokraften är återställd till 0,25 g.');
-});
 
 $('set-logs').addEventListener('click', () => show('logs'));
 
