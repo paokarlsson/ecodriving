@@ -116,6 +116,7 @@ export class RealCar {
     this.coast = null;          // {target, at}
     this.stats = { stops: 0, redLights: 0, greenLights: 0, brakes: 0, ignored: 0 };
     this.braking = false;
+    this.hold = null;           // håller farten efter rullning: {v, until}
   }
 
   limitAt(s) {
@@ -211,17 +212,28 @@ export class RealCar {
     if (this.coast) {
       const tg = this.coast.target;
       const greenNear = tg.kind === 'traffic_signals' && this.decided.get(tg.id) === 'green' && tg.s - this.s < 80;
-      if (this.s >= tg.s - 5 || greenNear || this.passed.has(tg.id)) this.coast = null;
+      // Har bilen redan rullat ner till målets fart slutar föraren rulla och
+      // håller farten (annars skulle den rulla till stopp långt före målet)
+      const slowEnough = this.t >= this.coast.at && this.v <= Math.max(tg.v ?? 0, 4);
+      if (slowEnough && !greenNear) this.hold = { v: this.v, until: tg.sEnd ?? tg.s };
+      if (this.s >= tg.s - 5 || greenNear || slowEnough || this.passed.has(tg.id)) this.coast = null;
     }
+    if (this.hold && this.s > this.hold.until) this.hold = null;
     const coasting = this.coast && this.t >= this.coast.at;
     let a;
     // Hysteres: en börjad inbromsning fortsätter tills behovet tydligt sjunkit
     const braking = this.braking ? need >= 0.4 : need >= (coasting ? 1.1 : 0.9);
     if (braking) a = -Math.min(4.5, Math.max(need * 1.05, 0.5));
-    else if (coasting) a = -decel(this.v, g, this.trueModel);
+    else if (coasting) {
+      // Rullar, men håller emot i nedförsbacke så att kurvfarten inte överskrids
+      const want = Math.min(this.desiredAt(this.s), this.desiredAt(this.s + 2 * this.v + 10));
+      a = Math.min(-decel(this.v, g, this.trueModel), this.v > want ? 0.6 * (want - this.v) : Infinity);
+    }
     else {
       // Föraren gasar inte in i en kurva: tittar ca 2 s framåt
-      const err = Math.min(this.desiredAt(this.s), this.desiredAt(this.s + 2 * this.v + 10)) - this.v;
+      let want = Math.min(this.desiredAt(this.s), this.desiredAt(this.s + 2 * this.v + 10));
+      if (this.hold) want = Math.min(want, this.hold.v);
+      const err = want - this.v;
       const maxAcc = Math.max(0.6, 2.0 - this.v / 25);
       a = err > 0 ? Math.min(maxAcc, 0.45 * err + 0.15) : Math.max(-decel(this.v, g, this.trueModel), 0.6 * err);
       if (this.v < 1 && err > 0) a = Math.max(a, 1.2);

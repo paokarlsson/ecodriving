@@ -66,26 +66,34 @@ test('GPS-observationer har brus men ligger nära vägen', () => {
   assert.ok(maxOff > 0.5 && maxOff < 15, `avvikelse ${maxOff}`);
 });
 
-test('demo utan vägdata: max 120 km/h och högst 0,25 g i kurvorna', async () => {
+test('demo utan vägdata, som i appen: kommer fram, max 120 km/h och högst 0,25 g', async () => {
   const { readFileSync } = await import('node:fs');
   const { curveRadii } = await import('../js/route.js');
   const d = JSON.parse(readFileSync(new URL('../demo/ost-brunflo.json', import.meta.url)));
   const r = buildRoute(d.coords);
   const L = new Array(r.n).fill(null);
+  // Samma fartmål och motor som appen (vägdata saknas)
+  const targets = buildTargets(r, [], L, { aLat: 2.45 });
   const curves = curveTargets(r, 2.45, { limits: L });
-  const end = { s: r.length, kind: 'end', id: 'end', v: 0 };
-  const targets = [...curves.map((c, i) => ({ ...c, id: 'c' + i })), end];
   const R = curveRadii(r);
-  for (const seed of [1, 2, 3]) {
-    const car = new RealCar(r, targets, L, curves, { A: 0.4, C: 0.0004 }, { rand: seededRandom(seed) });
-    let maxV = 0, maxG = 0;
-    for (let i = 0; i < 3000 && car.s < r.length - 5; i++) {
-      car.step(1);
+  const model = { A: 0.4, C: 0.0004 };
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const eng = new DriveEngine(r, targets, model, { marginS: 1.5 });
+    const car = new RealCar(r, targets, L, curves, model, { rand: seededRandom(seed) });
+    let maxV = 0, maxG = 0, arrived = null, releases = 0, t = 0;
+    for (; t < 3000 && !arrived; t++) {
+      const obs = car.step(1);
       maxV = Math.max(maxV, car.v);
       const Ri = R[Math.min(r.n - 1, Math.round(car.s / r.step))];
       maxG = Math.max(maxG, car.v ** 2 / Ri / 9.81);
+      for (const e of eng.update(obs).events) {
+        if (e.type === 'release') { releases++; car.onRelease(e.target); }
+        if (e.type === 'arrived') arrived = e.stats;
+      }
     }
-    assert.ok(car.s >= r.length - 5, `seed ${seed} kom fram`);
+    assert.ok(arrived, `seed ${seed} kom fram (stod på ${Math.round(car.s)} m)`);
+    assert.ok(t < 1500, `körtid ${t} s`);
+    assert.ok(releases >= 5, `släpp-signaler ${releases}`);
     assert.ok(maxV * 3.6 <= 120.5, `maxfart ${maxV * 3.6}`);
     assert.ok(maxV * 3.6 > 100, `kör upp mot 120 där vägen är rak (${maxV * 3.6})`);
     assert.ok(maxG <= 0.25, `sidokraft ${maxG}`);
