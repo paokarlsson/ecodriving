@@ -88,7 +88,6 @@
   <section class="screen" id="calib" hidden>
     <header class="bar"><button class="icon-btn back" data-back aria-label="Tillbaka">‹</button><h1>Kalibrering (rullprov)</h1></header>
     <div class="content">
-      <p class="hint" id="calib-profile"></p>
       <div id="calib-intro">
         <p>Ett rullprov lär appen hur långt just din bil rullar när du släpper gasen.</p>
         <ol class="steps">
@@ -297,20 +296,8 @@
       <h2 class="section-title">Släpvagn</h2>
       <div class="card">
         <label class="field check">
-          <input type="checkbox" id="set-trailer"> <span>Släpvagnsläge</span>
+          <input type="checkbox" id="set-trailer"> <span>Släpvagn (max 80 km/h)</span>
         </label>
-        <label class="field range">
-          <span>Högsta fart med släp <output id="set-tmax-out"></output></span>
-          <input type="range" id="set-tmax" min="40" max="100" step="10">
-          <small>Personbil med släpvagn: högst 80 km/h. Obromsad släpvagn som väger mer än halva bilens tjänstevikt: högst 40 km/h. Lägre skyltad gräns gäller alltid.</small>
-        </label>
-        <label class="field range">
-          <span>Sidokraft i kurvor med släp <output id="set-talat-out"></output></span>
-          <input type="range" id="set-talat" min="0.10" max="0.30" step="0.01">
-          <small>Lägre än utan släp ger marginal mot slingring.</small>
-        </label>
-        <p id="set-tcalib-show">Släpet är inte kalibrerat.</p>
-        <button class="btn small" id="set-tcalib-redo">Gör rullprov med släpet</button>
       </div>
 
       <h2 class="section-title">Data</h2>

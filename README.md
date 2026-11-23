@@ -24,13 +24,13 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 - **Kurvradien** räknas hörn för hörn i ruttens linje: varje hörn får den största båge som ryms i linjens geometri (avviker högst 5 m från hörnet och får plats på halva sträckorna till grannhörnen). Glest ritade hörn blir då mjuka kurvor som på den verkliga vägen, tätt ritade kurvor får sin riktiga radie och tvära korsningar förblir skarpa. Kurvor med mindre än 150 m emellan slås ihop.
 - **Rekommenderad kurvfart** räknas ur kurvradien och vald sidokraft (standard 0,25 g; 1 g = 9,81 m/s²). Över 50 km/h sänks sidokraften gradvis till 65 % vid 110 km/h.
-- **Släpvagnsläge** (hemskärmen, ruttöversikten eller Inställningar): skyltad gräns men högst 80 km/h (inställbart, t.ex. 40 km/h för tung obromsad släpvagn), sidokraft 0,18 g i kurvor och en egen kalibrering. Utan rullprov med släpet uppskattas modellen från bilens värden.
+- **Släpvagnsläge** (bockruta på hemskärmen, i ruttöversikten eller i Inställningar): skyltad gräns men högst 80 km/h. Sidokraft, rullmodell och inlärning är desamma som utan släp.
 
 ## Uppmätt kurvkraft (gyro)
 
 - Gyrot mäter bilens vridhastighet kring lodlinjen (oberoende av hur telefonen sitter); sidokraften är `a = v · ω` med farten från GPS.
 - Under kurvan visas en mätare med uppmätt mot planerad sidokraft. Var toppen mer än 15 % över planerat frågar appen efter kurvan, på rak väg: *Okej* eller *För mycket*. Obesvarade frågor finns i sammanfattningen.
-- Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar. Bil och släp lär sig var för sig.
+- Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar.
 - Telefoner anger gyrots axlar, enheter och tecken olika (en inspelning visade en webbläsare som lade x-rotationen i `alpha`). Appen lär sig därför vilken kombination av gyrots tre axlar som är "sväng": gyrots vridning summeras mellan två GPS-positioner och jämförs med GPS-kursens ändring (eller ruttens, om kursen saknas) över samma tid, med minsta kvadrat över intervallen. Det kräver ungefär en minuts körning med några svängar och sparas till nästa körning. Att jämföra mätvärde för mätvärde fungerar inte, eftersom GPS-kursen kommer en gång i sekunden och ligger efter. Stötar över ca 70°/s ignoreras.
 - Accelerometern (med tyngdkraft, tyngdkraften utjämnad över 20 s) ger en kontroll: i tydliga kurvor ska den visa ungefär samma sidokraft som gyrot. Skiljer de sig mer än en faktor 2–2,5 i fem kurvor varnar appen för lös hållare. Accelerometerns topp per kurva loggas (`accPeakG`).
 - Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
@@ -39,7 +39,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 Varje rullning efter en släpp-signal blir ett litet rullprov. Appen hittar rullningen i GPS-farten, klipper bort början (foten lämnar gasen), slutet och allt efter gas (farten ökar) eller broms (inbromsning 0,8 m/s² mer än modellen två sekunder i rad, eller en ihållande stöt i accelerometern). Inbromsningen korrigeras för backen med ruttens höjddata.
 
-Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Rullningar som avviker mycket från modellen sorteras bort: lättare än väntat (troligen friläge) eller tyngre (broms). Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Bil och släp lär sig var för sig. Av/på och återställning under Inställningar → Kalibrering.
+Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Rullningar som avviker mycket från modellen sorteras bort: lättare än väntat (troligen friläge) eller tyngre (broms). Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Av/på och återställning under Inställningar → Kalibrering.
 
 ## Körlogg (JSON)
 
@@ -94,7 +94,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/logbook.js` | Körlogg som JSON och lagring av de senaste loggarna |
 | `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
-| `js/trailer.js` | Släpvagnsläge: maxfart och uppskattad rullmodell |
+| `js/trailer.js` | Släpvagnsläge: högst 80 km/h |
 | `js/demo.js`, `js/demoroutes.js`, `js/sim.js` | Testbana, demorutter på riktiga vägar och simulerade bilar |
 
 ## Publicering

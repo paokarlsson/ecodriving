@@ -22,9 +22,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   aLat: 2.45,          // sidokraft i kurvor (m/s²), 0,25 g
   giveWayKmh: 20,
   roundaboutKmh: 25,
-  trailer: false,      // släpvagnsläge
-  trailerMaxKmh: 80,
-  trailerALat: 1.77,   // 0,18 g
+  trailer: false,      // släpvagnsläge: högst 80 km/h
   learnCurves: true,      // låt svar om kurvkraft justera sidokraften
   askCurvesInDrive: true, // fråga direkt efter kurvan (annars i sammanfattningen)
   learnCoast: true,       // förfina rullmodellen av rullningar under körning
@@ -37,10 +35,8 @@ export const store = {
   set calibration(v) { set('calibration', v); },
   get settings() { return { ...DEFAULT_SETTINGS, ...(get('settings') || {}) }; },
   set settings(v) { set('settings', v); },
-  get calibrationTrailer() { return get('calibrationTrailer'); },
-  set calibrationTrailer(v) { set('calibrationTrailer', v); },
-  /** Antal svar som justerat sidokraften: {car, trailer}. */
-  get curveLearn() { return get('curveLearn', { car: 0, trailer: 0 }); },
+  /** Antal svar som justerat sidokraften: {car}. */
+  get curveLearn() { return get('curveLearn', { car: 0 }); },
   set curveLearn(v) { set('curveLearn', v); },
   /** De senaste svaren om kurvkraft (högst 200). */
   get curveAnswers() { return get('curveAnswers', []); },
@@ -54,7 +50,7 @@ export const store = {
   /** Inlärd gyroaxel {axis: [x, y, z], r2, date}. */
   get gyroAxis() { return get('gyroAxis'); },
   set gyroAxis(v) { set('gyroAxis', v); },
-  /** Inlärda rullningar per profil: {car: CoastStats-JSON, trailer: …}. */
+  /** Inlärda rullningar: {car: CoastStats-JSON}. */
   get coastLearn() { return get('coastLearn', {}); },
   set coastLearn(v) { set('coastLearn', v); },
   /** Hämtade demorutter: {id: {coords, distance, duration, fetched}}. */
