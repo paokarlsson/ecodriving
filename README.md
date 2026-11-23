@@ -18,7 +18,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Skapa en gratis nyckel på [account.heigit.org](https://account.heigit.org) och klistra in den i appen. Nyckeln sparas bara i telefonens webbläsare (`localStorage`) och skickas bara till `api.heigit.org`.
 - **Dela med vänner:** en länk med nyckeln som parameter, `https://<användare>.github.io/<repo>/?key=DIN_NYCKEL` (eller `#key=…`), sparar nyckeln i mottagarens telefon och tas sedan bort ur adressfältet. Knappen *Dela appen med nyckeln* under Inställningar skapar länken. Alla som använder länken delar på nyckelns dagskvot.
 - Gör ett **rullprov** (Inställningar → Kalibrering): i växel, ca 80 → 30 km/h på rak, plan väg, en gång i varje riktning.
-- Utan nyckel fungerar kalibreringen och **demorutten**, som simulerar en körning i fyrdubbel fart.
+- Utan nyckel fungerar kalibreringen och den korta **testbanan**, som simulerar en körning i fyrdubbel fart.
 
 ## Kurvor och släpvagn
 
@@ -51,9 +51,9 @@ Innehåll: `kind` (`drive` | `calibration`), `dest`, `trailer`, `settings`, `mod
 `samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
-## Demorutter
+## Testbana
 
-Rutten Stortorget → Brunflo (18 km, stad, rondeller och E14) är inbyggd i appen (`demo/ost-brunflo.json`, hämtad från openrouteservice) och fungerar utan nyckel och utan nät. Demorutterna finns på sidan Koppla OpenRouteService, under fältet för nyckeln (nås vid start och via Inställningar → Byt/Lägg till). Där finns också andra demorutter mellan riktiga platser (Östersund–Brunflo, Åre–Duved, Slussen–Solna, Lindholmen–Mölndal, Uppsala–Sigtuna). Första gången hämtas rutten med användarens egen nyckel och sparas i telefonen; vägdatan sparas i den vanliga cachen. Sedan kör en simulerad förare rutten (`RealCar` i `js/sim.js`): egen fartmarginal kring gränsen och högst 120 km/h där gräns saknas, mjuk acceleration med begränsat ryck, högst 0,25 g i varje kurva (farten räknas ur vägens radie, med bromsning i förväg), bekväm inbromsning, följer släpp-signaler efter 0,8–1,6 s men inte alltid, trafikljus som är röda eller gröna slumpvis, GPS- och gyrobrus och rullegenskaper som avviker lite från appens modell. Körningen ser ut som en vanlig körning och går i verklig fart (1×); knappen i körvyn snabbar upp den (4×, 8×, 16×). Appen lär sig inte av demokörningar. Den korta testbanan kräver ingen nyckel.
+Den korta testbanan (på sidan Koppla OpenRouteService, under fältet för nyckeln) kräver ingen nyckel. En simulerad bil kör den i fyrdubbel fart; knappen i körvyn ändrar farten (1×, 4×, 8×, 16×). Appen lär sig inte av testkörningar.
 
 ## Rådata och inspelning utan rutt
 
@@ -94,7 +94,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/trailer.js` | Släpvagnsläge: högst 80 km/h |
-| `js/demo.js`, `js/demoroutes.js`, `js/sim.js` | Testbana, demorutter på riktiga vägar och simulerade bilar |
+| `js/demo.js`, `js/sim.js` | Testbana och simulerade bilar |
 
 ## Publicering
 

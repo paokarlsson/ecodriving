@@ -66,10 +66,10 @@ test('GPS-observationer har brus men ligger nära vägen', () => {
   assert.ok(maxOff > 0.5 && maxOff < 15, `avvikelse ${maxOff}`);
 });
 
-test('demo utan vägdata, som i appen: kommer fram, max 120 km/h och högst 0,25 g', async () => {
+test('riktig väg utan vägdata: kommer fram, max 120 km/h och högst 0,25 g', async () => {
   const { readFileSync } = await import('node:fs');
   const { curveRadii } = await import('../js/route.js');
-  const d = JSON.parse(readFileSync(new URL('../demo/ost-brunflo.json', import.meta.url)));
+  const d = JSON.parse(readFileSync(new URL('./fixtures/ost-brunflo.json', import.meta.url)));
   const r = buildRoute(d.coords);
   const L = new Array(r.n).fill(null);
   // Samma fartmål och motor som appen (vägdata saknas)

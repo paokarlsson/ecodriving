@@ -1,4 +1,4 @@
-// Simulerad bil som följer rutten. Används i demoläget och i tester.
+// Simulerad bil som följer rutten. SimCar används på testbanan, RealCar i tester.
 // Föraren håller gränsen, släpper gasen vid signal och bromsar bara om det behövs.
 import { latLonAt, gradeAt, curveRadii } from './route.js';
 
@@ -69,7 +69,7 @@ export class SimCar {
 }
 
 // ---------------------------------------------------------------------------
-// Realistisk bil för demorutter på riktiga vägar.
+// Realistisk förare på riktiga vägar, för tester.
 
 /** Liten, sådd slumpgenerator så att en demo kan upprepas. */
 export function seededRandom(seed = Date.now()) {

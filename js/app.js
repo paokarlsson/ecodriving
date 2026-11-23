@@ -21,8 +21,7 @@ const safeStorage = {
   removeItem: k => { try { localStorage.removeItem(k); } catch { /* blockerad */ } },
 };
 const logStore = makeLogStore(safeStorage, { onRemove: id => deleteRaw(id) });
-import { SimCar, RealCar, seededRandom } from './sim.js';
-import { DEMO_ROUTES, compactCoords } from './demoroutes.js';
+import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
 import { unlockAudio, sounds, speak } from './audio.js';
 import {
@@ -114,7 +113,6 @@ function enterKey() {
   $('key-input').value = store.key || '';
   $('key-status').hidden = true;
   $('key-skip').hidden = !onboarding;
-  renderDemoRoutes();
 }
 function keyStatus(cls, html) {
   const s = $('key-status');
@@ -426,22 +424,6 @@ $('search-form').addEventListener('submit', async e => {
   }
 });
 
-function renderDemoRoutes() {
-  const ul = $('demo-routes');
-  ul.innerHTML = '';
-  const saved = store.demoRoutes || {};
-  for (const d of DEMO_ROUTES) {
-    const have = !!saved[d.id] || !!d.bundled;
-    const li = document.createElement('li');
-    const status = d.bundled ? 'inbyggd' : saved[d.id] ? 'sparad' : (store.key ? 'hämtas första gången' : 'kräver nyckel första gången');
-    li.innerHTML = `<button class="pick"><strong>${esc(d.name)}</strong><br><small class="hint">${esc(d.note)} · ${esc(status)}</small></button>`;
-    const btn = li.querySelector('button');
-    btn.disabled = !have && !store.key;
-    btn.addEventListener('click', () => planDemoRoute(d));
-    ul.appendChild(li);
-  }
-}
-
 function renderFavorites() {
   renderRecents();
   const favs = store.favorites;
@@ -574,42 +556,6 @@ async function planDemo() {
 }
 $('demo-btn').addEventListener('click', planDemo);
 
-/** Demorutt på riktig väg: hämtas en gång med nyckeln och sparas. */
-async function planDemoRoute(d) {
-  store.lastTrip = { dest: null, demo: true, demoId: d.id, stage: 'overview', at: Date.now() };
-  show('overview');
-  $('ov-title').textContent = d.name;
-  const step = text => { $('ov-summary').innerHTML = `<span><span class="spinner"></span>${esc(text)}</span>`; };
-  $('ov-counts').innerHTML = '';
-  $('ov-warn').hidden = true;
-  $('ov-start').disabled = true;
-  $('ov-fav').hidden = true;
-  try {
-    let saved = (store.demoRoutes || {})[d.id];
-    if (!saved && d.bundled) {
-      // Inbyggd demorutt: rutt (och ev. vägdata) följer med appen
-      step('Läser in demorutten…');
-      const res = await fetch(d.bundled);
-      if (!res.ok) throw new Error('Demorutten gick inte att läsa in.');
-      saved = await res.json();
-    }
-    if (!saved) {
-      if (!store.key) throw new Error('Lägg till en nyckel för att hämta demorutten första gången.');
-      step('Hämtar rutt…');
-      const r = await getRoute(store.key, d.from, d.to);
-      saved = { coords: compactCoords(r.coords), distance: r.distance, duration: r.duration, fetched: new Date().toISOString() };
-      store.demoRoutes = { ...(store.demoRoutes || {}), [d.id]: saved };
-    }
-    const p = await prepare(saved.coords, saved.osm || null, step);
-    plan = { dest: { name: d.name }, ...p, duration: saved.duration, demo: true, demoReal: true, demoId: d.id };
-    renderOverview();
-  } catch (e) {
-    $('ov-summary').textContent = '';
-    toast(e.message || 'Kunde inte hämta demorutten', true, 6000);
-    back();
-  }
-}
-
 function renderOverview() {
   const { route, targets, dest, duration, warnings } = plan;
   $('ov-title').textContent = dest.name;
@@ -625,7 +571,7 @@ function renderOverview() {
     `<li><i style="background:${KIND_COLOR[k]}"></i>${c[k]} ${esc(c[k] > 1 ? PLURAL[k] : kindLabel(k))}${esc(legendExtra(k))}</li>`).join('');
   const w = [...(warnings || [])];
   if (!store.calibration) w.push('Bilen är inte kalibrerad – typvärden används. Gör ett rullprov för bättre precision.');
-  if (plan.demo && !plan.demoReal) w.push('Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
+  if (plan.demo) w.push('Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
   $('ov-warn').innerHTML = w.map(esc).join('<br>');
   $('ov-warn').hidden = !w.length;
   $('ov-start').disabled = false;
@@ -710,23 +656,17 @@ function startDrive() {
   $('d-simspeed').hidden = !plan.demo;
   if (plan.demo) {
     drive.meter.defaultSign = 1; // simulerat gyro har redan höger positiv
-    if (plan.demoReal) {
-      drive.sim = new RealCar(plan.route, plan.targets, plan.limits, plan.curves, model(), { rand: seededRandom() });
-    } else {
-      drive.sim = new SimCar(plan.route, plan.limits, model());
-    }
+    drive.sim = new SimCar(plan.route, plan.limits, model());
     const tick = () => {
       if (!drive.sim) return;
-      const obs = drive.sim instanceof RealCar ? drive.sim.step(1) : drive.sim.step(1, plan.targets);
+      const obs = drive.sim.step(1, plan.targets);
       // Simulerat gyro: bilens vridhastighet ur ruttens form
       drive.meter.setSpeed(obs.speed);
-      const yaw = drive.sim instanceof RealCar ? drive.sim.yaw(routeYaw) : routeYaw(plan.route, drive.sim.s, obs.speed, 10);
-      drive.meter.addYaw(obs.t, yaw, 1);
+      drive.meter.addYaw(obs.t, routeYaw(plan.route, drive.sim.s, obs.speed, 10), 1);
       sampleCurve(obs.t);
       onDriveObs(obs);
     };
-    // Demo på riktig väg går i verklig fart, som en vanlig körning
-    drive.simSpeed = drive.simSpeed || (plan.demoReal ? 1 : 4);
+    drive.simSpeed = drive.simSpeed || 4;
     $('d-simspeed').textContent = `${drive.simSpeed}×`;
     drive.simTimer = setInterval(tick, 1000 / drive.simSpeed);
     drive.simTick = tick;
@@ -773,7 +713,6 @@ function saveDriveLog(stats = null) {
     gyroAxis: m?.axis ? m.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
     gyroAxisR2: m?.axisR2 ?? null, gyroSign: m?.sign ?? null,
     coastFound: drive.coastFound ?? 0, coastUsed: drive.coastUsed ?? 0,
-    sim: drive.sim instanceof RealCar ? { ...drive.sim.stats, trueModel: drive.sim.trueModel, offsetKmh: drive.sim.offset * 3.6 } : null,
     modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
   logStore.save(drive.log);
@@ -1552,8 +1491,7 @@ if (!store.safetyAck || !store.onboarded) {
   show('home');
   if (trip && trip.stage && Date.now() - trip.at < TRIP_MAX_AGE) {
     const wasDriving = trip.stage === 'driving';
-    if (trip.demo && trip.demoId) { const d = DEMO_ROUTES.find(x => x.id === trip.demoId); if (d) planDemoRoute(d); }
-    else if (trip.demo) planDemo();
+    if (trip.demo) planDemo();
     else if (trip.dest && store.key) planRoute(trip.dest);
     if (wasDriving) toast('Sidan laddades om. Rutten är hämtad igen – tryck Starta för att fortsätta.', false, 7000);
   }
