@@ -132,11 +132,6 @@
       <ul id="recents" class="list"></ul>
       <button class="btn" id="rec-btn">Spela in körning utan rutt</button>
       <p class="hint">Bara loggning: GPS, gyro, accelerometer och kompass sparas i telefonen. Inga signaler.</p>
-
-      <h2 class="section-title">Demorutter</h2>
-      <p class="hint">En simulerad bil kör en riktig väg, med förare som ibland inte följer signalerna, trafikljus som slår om och GPS-brus. Rutten hämtas första gången med din nyckel och sparas sedan i telefonen.</p>
-      <ul id="demo-routes" class="list"></ul>
-      <button class="btn ghost" id="demo-btn">Kort testbana (ingen nyckel behövs)</button>
     </div>
   </section>
 
@@ -240,6 +235,11 @@
           <input id="set-share-link" class="share-link" type="text" readonly hidden aria-label="Länk med nyckel">
         </div>
       </div>
+
+      <h2 class="section-title">Demorutter</h2>
+      <p class="hint">Demokörning på en riktig väg: körskärmen ser ut som vid en vanlig körning, men en simulerad förare kör. Den håller gränsen, högst 120 km/h där gräns saknas och högst 0,25 g i kurvorna. Inbyggda rutter fungerar utan nyckel; övriga hämtas första gången med din nyckel.</p>
+      <ul id="demo-routes" class="list"></ul>
+      <button class="btn ghost" id="demo-btn">Kort testbana (ingen nyckel behövs)</button>
 
       <h2 class="section-title">Kalibrering</h2>
       <div class="card">

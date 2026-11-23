@@ -198,14 +198,14 @@ export function curveSpeeds(route, aLat) {
 
 /**
  * Kurvor där rekommenderad fart understiger gränsen (minus 5 km/h), eller
- * 100 km/h där gränsen är okänd. Målet läggs där kurvfarten först närmar sig
+ * 115 km/h där gränsen är okänd (okänd gräns räknas som 120). Målet läggs där kurvfarten först närmar sig
  * kurvans lägsta fart, så att bilen har rätt fart vid insläppet.
  * Varje kurva: {s, sEnd, v (m/s), radius (m), kind: 'curve'}.
  */
 export function curveTargets(route, aLat, { limits = null, skipStart = 60, skipEnd = 30 } = {}) {
   const V = curveSpeeds(route, aLat);
   const cap = i => {
-    const lim = limits && limits[i] != null && Number.isFinite(limits[i]) ? limits[i] : 105;
+    const lim = limits && limits[i] != null && Number.isFinite(limits[i]) ? limits[i] : 120;
     return (lim - 5) / 3.6;
   };
   const out = [];

@@ -1,6 +1,10 @@
 // Simulerad bil som följer rutten. Används i demoläget och i tester.
 // Föraren håller gränsen, släpper gasen vid signal och bromsar bara om det behövs.
-import { latLonAt, gradeAt } from './route.js';
+import { latLonAt, gradeAt, curveRadii } from './route.js';
+
+/** Högsta sidokraft föraren tar en kurva med (g) och fart där gräns saknas (km/h). */
+export const DEMO_MAX_G = 0.25;
+export const DEMO_MAX_KMH = 120;
 import { decel } from './physics.js';
 
 export class SimCar {
@@ -101,7 +105,10 @@ export class RealCar {
     // Bilens verkliga rullegenskaper avviker lite från appens modell
     this.trueModel = { A: model.A * (0.88 + 0.24 * rand()), C: model.C * (0.85 + 0.3 * rand()) };
     this.offset = (-2 + 6 * rand()) / 3.6;
-    this.curveFactor = 1 + 0.08 * rand();
+    // Kurvfart ur vägens radie: aldrig över 0,25 g (lite marginal: 0,97)
+    const R = curveRadii(route);
+    this.vCurve = new Float64Array(route.n);
+    for (let i = 0; i < route.n; i++) this.vCurve[i] = Math.min(DEMO_MAX_KMH / 3.6, 0.97 * Math.sqrt(DEMO_MAX_G * 9.81 * R[i]));
     this.s = 0; this.v = 0; this.t = 0; this.a = 0;
     this.stoppedUntil = null;
     this.decided = new Map();   // trafikljus → 'red' | 'green'
@@ -114,13 +121,18 @@ export class RealCar {
   limitAt(s) {
     const i = Math.min(this.route.n - 1, Math.max(0, Math.round(s / this.route.step)));
     const l = this.limits ? this.limits[i] : null;
-    return (l ?? 70) / 3.6;
+    return l != null && Number.isFinite(l) ? l / 3.6 : null;
   }
 
+  curveAt(s) {
+    return this.vCurve[Math.min(this.route.n - 1, Math.max(0, Math.round(s / this.route.step)))];
+  }
+
+  /** Önskad fart: gränsen plus egen marginal (max 120 utan gräns), aldrig över 0,25 g i kurva. */
   desiredAt(s) {
-    let v = this.limitAt(s) + this.offset;
-    for (const c of this.curves) if (s >= c.s && s <= c.sEnd) v = Math.min(v, c.v * this.curveFactor);
-    return Math.max(3, v);
+    const lim = this.limitAt(s);
+    const v = Math.min(lim != null ? lim + this.offset : DEMO_MAX_KMH / 3.6 + Math.min(0, this.offset), this.curveAt(s));
+    return Math.max(2, v);
   }
 
   onRelease(target) {
@@ -151,8 +163,15 @@ export class RealCar {
       } else if (tg.kind === 'end') {
         out.push({ s: tg.s, v: 0, stop: true, id: tg.id, wait: 1e9 });
       } else {
-        out.push({ s: tg.s, v: tg.kind === 'curve' ? tg.v * this.curveFactor : tg.v + this.offset, stop: false, id: tg.id });
+        if (tg.kind !== 'curve') out.push({ s: tg.s, v: tg.v + this.offset, stop: false, id: tg.id });
       }
+    }
+    // Kurvor och lägre gränser framåt: farten vid varje punkt inom 500 m
+    const st = this.route.step;
+    for (let i = Math.ceil((this.s + 1) / st); i < this.route.n && i * st - this.s <= 500; i++) {
+      // Ett sampel gäller ±st/2; föraren vill ha rätt fart några meter före
+      const v = this.desiredAt(i * st);
+      if (v < this.v) out.push({ s: Math.max(this.s + 0.5, i * st - st / 2 - 4), v, stop: false, id: null });
     }
     return out;
   }
@@ -201,7 +220,8 @@ export class RealCar {
     if (braking) a = -Math.min(4.5, Math.max(need * 1.05, 0.5));
     else if (coasting) a = -decel(this.v, g, this.trueModel);
     else {
-      const err = this.desiredAt(this.s) - this.v;
+      // Föraren gasar inte in i en kurva: tittar ca 2 s framåt
+      const err = Math.min(this.desiredAt(this.s), this.desiredAt(this.s + 2 * this.v + 10)) - this.v;
       const maxAcc = Math.max(0.6, 2.0 - this.v / 25);
       a = err > 0 ? Math.min(maxAcc, 0.45 * err + 0.15) : Math.max(-decel(this.v, g, this.trueModel), 0.6 * err);
       if (this.v < 1 && err > 0) a = Math.max(a, 1.2);

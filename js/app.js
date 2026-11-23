@@ -451,7 +451,6 @@ function renderDemoRoutes() {
 
 function renderFavorites() {
   renderRecents();
-  renderDemoRoutes();
   const favs = store.favorites;
   $('fav-title').hidden = !favs.length || !store.key;
   const ul = $('favorites');
@@ -635,9 +634,7 @@ function renderOverview() {
   if (trailerOn()) {
     if (!store.calibrationTrailer) w.push('Släpet är inte kalibrerat – uppskattade värden utifrån bilen används. Gör ett rullprov med släpet för bättre precision.');
   } else if (!store.calibration) w.push('Bilen är inte kalibrerad – typvärden används. Gör ett rullprov för bättre precision.');
-  if (plan.demo) w.push(plan.demoReal
-    ? 'Demoläge: en simulerad förare kör den riktiga vägen (ändra farten med knappen uppe till höger). Ingen GPS används, och appen lär sig inte av demon.'
-    : 'Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
+  if (plan.demo && !plan.demoReal) w.push('Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
   $('ov-warn').innerHTML = w.map(esc).join('<br>');
   $('ov-warn').hidden = !w.length;
   $('ov-start').disabled = false;
@@ -739,7 +736,8 @@ function startDrive() {
       sampleCurve(obs.t);
       onDriveObs(obs);
     };
-    drive.simSpeed = drive.simSpeed || 4;
+    // Demo på riktig väg går i verklig fart, som en vanlig körning
+    drive.simSpeed = drive.simSpeed || (plan.demoReal ? 1 : 4);
     $('d-simspeed').textContent = `${drive.simSpeed}×`;
     drive.simTimer = setInterval(tick, 1000 / drive.simSpeed);
     drive.simTick = tick;
@@ -1249,7 +1247,7 @@ function describeTarget(t, capitalize = true) {
 // Simuleringens fart i demoläget: 1×, 4×, 8×, 16×
 $('d-simspeed').addEventListener('click', () => {
   const speeds = [1, 4, 8, 16];
-  drive.simSpeed = speeds[(speeds.indexOf(drive.simSpeed || 4) + 1) % speeds.length];
+  drive.simSpeed = speeds[(speeds.indexOf(drive.simSpeed || 1) + 1) % speeds.length];
   $('d-simspeed').textContent = `${drive.simSpeed}×`;
   if (drive.simTimer && drive.simTick) {
     clearInterval(drive.simTimer);
@@ -1331,6 +1329,7 @@ function enterSettings() {
   $('set-share-link').hidden = true;
   $('set-key-delete').hidden = !k;
   $('set-key-change').textContent = k ? 'Byt' : 'Lägg till';
+  renderDemoRoutes();
   const c = store.calibration;
   $('set-calib-show').textContent = c
     ? `Rullprov ${new Date(c.date).toLocaleDateString('sv-SE')} (${c.runs} prov).`
