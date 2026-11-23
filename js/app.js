@@ -9,7 +9,7 @@ import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './
 import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
 import { trailerLimits, TRAILER_MAX_KMH } from './trailer.js';
-import { LateralMeter, CurveTracker, isStraightAt, routeYaw } from './lateral.js';
+import { LateralMeter, CurveTracker, isStraightAt, routeYaw, curveRadiusText } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
 import { RawRecorder, readRaw, deleteRaw, persistStorage } from './rawstore.js';
 import { CoastLearner, CoastStats, acceptSegment } from './coastlearn.js';
@@ -1149,9 +1149,10 @@ function renderCurveSummary() {
   for (const rec of log) {
     const li = document.createElement('li');
     const name = `Kurva vid ${fmtDist(rec.s)}, ${rec.dir === 'left' ? 'vänster' : 'höger'}`;
-    const meta = rec.valid
+    const radius = curveRadiusText(rec);
+    const meta = (radius ? `${radius} · ` : '') + (rec.valid
       ? `${fmtG(rec.peakG)} · planerat ${fmtG(rec.plannedG)} · högst ${kmh(rec.maxV)} km/h`
-      : `Inte mätt: ${rec.reason}`;
+      : `Inte mätt: ${rec.reason}`);
     const right = rec.ask
       ? '<span class="curve-chip over">över planerat</span>'
       : `<span class="curve-chip">${rec.valid ? 'inom planerat' : '–'}</span>`;
