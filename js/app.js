@@ -114,6 +114,7 @@ function enterKey() {
   $('key-input').value = store.key || '';
   $('key-status').hidden = true;
   $('key-skip').hidden = !onboarding;
+  renderDemoRoutes();
 }
 function keyStatus(cls, html) {
   const s = $('key-status');
@@ -1329,7 +1330,6 @@ function enterSettings() {
   $('set-share-link').hidden = true;
   $('set-key-delete').hidden = !k;
   $('set-key-change').textContent = k ? 'Byt' : 'Lägg till';
-  renderDemoRoutes();
   const c = store.calibration;
   $('set-calib-show').textContent = c
     ? `Rullprov ${new Date(c.date).toLocaleDateString('sv-SE')} (${c.runs} prov).`

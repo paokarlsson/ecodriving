@@ -307,3 +307,8 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   .spinner { animation-duration: 2s; }
 }
 .list li > button.pick:disabled { opacity: 0.55; cursor: default; }
+
+/* Nyckelsidan: demo under knapparna, så knapparna inte ligger fast över listan */
+#key .actions { position: static; background: none; }
+#key .content:first-of-type { flex: 0 0 auto; }
+#key .key-demo { flex: 1; padding-top: 0; }
