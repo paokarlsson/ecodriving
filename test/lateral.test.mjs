@@ -5,6 +5,7 @@ import { buildRoute, curveTargets } from '../js/route.js';
 import { demoData } from '../js/demo.js';
 
 const G = 9.81;
+const DEGR = Math.PI / 180;
 
 test('vridhastighet kring lodlinjen oavsett telefonens vinkel', () => {
   assert.ok(Math.abs(yawFromGyro({ alpha: 10, beta: 0, gamma: 0 }, [0, 0, 9.81]) - 10 * Math.PI / 180) < 1e-9);
@@ -121,46 +122,73 @@ test('bollen: vänstersväng trycker åt höger, tecknet lärs av rutten', () =>
   assert.equal(Math.abs(r.current().side), 0);
 });
 
-test('gyrot lär sig axeln när telefonen anger svängen på fel axel', () => {
-  // Telefon lutad 12° bakåt i hållaren. Webbläsaren lägger svängen (som borde
-  // ligga på y-axeln, "gamma") i "beta" istället – som i loggen, där gyrot bara
-  // såg ca sin(12°) ≈ 0,2 av svängen.
-  const tilt = 12 * Math.PI / 180;
-  const grav = { gx: 0, gy: 9.81 * Math.cos(tilt), gz: 9.81 * Math.sin(tilt) };
+/**
+ * Kör en bil med 50 Hz-gyro och GPS en gång i sekunden. turnRate(t) = sann
+ * vridhastighet (rad/s, höger positiv). mapRot(degRight) ger webbläsarens
+ * rotationRate för en sväng åt höger med degRight grader/s.
+ */
+function driveWithGps(m, { grav, mapRot, turnRate, seconds = 400, v = 12 }) {
+  let t = 0, acc = 0;
+  m.setSpeed(v);
+  for (let sec = 0; sec < seconds; sec++) {
+    for (let k = 0; k < 50; k++) {
+      const w = turnRate(t);
+      m.addMotion({ t, rot: mapRot(w * 180 / Math.PI), ...grav });
+      acc += w * 0.02;
+      t += 0.02;
+    }
+    m.learnInterval(acc); // GPS-kursens ändring sedan förra positionen
+    acc = 0;
+  }
+  return t;
+}
+const kurvor = t => { const p = t % 40; return p < 8 ? 0.25 * Math.sin(p / 8 * Math.PI) * (Math.floor(t / 40) % 2 ? -1 : 1) : 0; };
+
+test('gyrot lär sig axeln när webbläsaren lägger svängen i fel värde (som telefonen i loggen)', () => {
+  // Telefonen lutad 55° bakåt: uppåt i telefonen = (0; 0,57; 0,82).
+  // Sväng höger = negativ rotation kring uppåt. Webbläsaren lägger x-rotationen
+  // i alpha, y i gamma och z i beta (det inspelningen visade).
+  const up = [0, Math.cos(55 * DEGR), Math.sin(55 * DEGR)];
+  const grav = { gx: 9.81 * up[0], gy: 9.81 * up[1], gz: 9.81 * up[2] };
+  const mapRot = d => { const w = up.map(u => -d * u); return { alpha: w[0], gamma: w[1], beta: w[2] }; };
   const m = new LateralMeter();
-  m.setSpeed(25);
-  let t = 0;
-  const feed = rightRad => {
-    const deg = rightRad * 180 / Math.PI;
-    // Sant: sväng höger = negativ rotation kring "upp". Uppåt i telefonen ≈ y (och lite z).
-    const wy = -deg * Math.cos(tilt), wz = -deg * Math.sin(tilt);
-    // Fel i webbläsaren: y-rotationen hamnar i beta, x-rotationen (0) i gamma
-    m.addMotion({ t, rot: { alpha: wz, beta: wy, gamma: 0 }, ...grav });
-    m.learn(rightRad);
-    t += 0.02;
-  };
-  // Före inlärning: för lite (som i loggen)
-  for (let i = 0; i < 40; i++) feed(0.1);
-  const before = Math.abs(m.current().yaw);
-  assert.ok(before < 0.04, `före ${before}`);
-  // Kurvor åt båda håll lär in axeln
-  for (let k = 0; k < 6; k++) for (let i = 0; i < 100; i++) feed(0.1 * Math.sin(i / 100 * Math.PI) * (k % 2 ? -1 : 1));
+  driveWithGps(m, { grav, mapRot, turnRate: kurvor, seconds: 30 });
+  // Före inlärning (standardordning): för lite eller fel
+  driveWithGps(m, { grav, mapRot, turnRate: kurvor, seconds: 400 });
   assert.ok(m.axis, 'axeln inlärd');
-  for (let i = 0; i < 100; i++) feed(0.1);
-  const after = m.current();
-  assert.ok(Math.abs(after.yaw - 0.1) < 0.01, `efter ${after.yaw}`);
-  assert.ok(Math.abs(after.g - 25 * 0.1 / 9.81) < 0.02);
-  assert.ok(after.side < 0, 'högersväng trycker åt vänster');
+  assert.ok(m.axisR2 > 0.95, `R² ${m.axisR2}`);
+  // Mät en stadig högersväng på 0,2 rad/s
+  for (let k = 0; k < 200; k++) m.addMotion({ t: 1e4 + k * 0.02, rot: mapRot(0.2 * 180 / Math.PI), ...grav });
+  const c = m.current();
+  assert.ok(Math.abs(c.yaw - 0.2) < 0.01, `yaw ${c.yaw}`);
+  assert.ok(c.side < 0, 'högersväng trycker åt vänster');
 });
 
 test('gyrot klarar rad/s i stället för grader/s', () => {
+  const grav = { gx: 0, gy: 0, gz: 9.81 };
+  const mapRot = d => ({ alpha: -d * Math.PI / 180, beta: 0, gamma: 0 });
   const m = new LateralMeter();
-  m.setSpeed(20);
-  let t = 0;
-  const feed = rightRad => { m.addMotion({ t, rot: { alpha: -rightRad, beta: 0, gamma: 0 }, gx: 0, gy: 0, gz: 9.81 }); m.learn(rightRad); t += 0.02; };
-  for (let k = 0; k < 6; k++) for (let i = 0; i < 100; i++) feed(0.15 * Math.sin(i / 100 * Math.PI) * (k % 2 ? -1 : 1));
-  for (let i = 0; i < 100; i++) feed(0.15);
-  assert.ok(Math.abs(m.current().yaw - 0.15) < 0.015, `${m.current().yaw}`);
+  driveWithGps(m, { grav, mapRot, turnRate: kurvor, seconds: 400 });
+  for (let k = 0; k < 200; k++) m.addMotion({ t: 1e4 + k * 0.02, rot: mapRot(0.15 * 180 / Math.PI), ...grav });
+  assert.ok(Math.abs(m.current().yaw - 0.15) < 0.01, `${m.current().yaw}`);
+});
+
+test('inlärningen tål att GPS-kursen är brusig och att gyrot har en nollpunkt', () => {
+  const grav = { gx: 0, gy: 9.81, gz: 0 };
+  const mapRot = d => ({ alpha: 0, beta: 0.3, gamma: -d });   // standard, med nollpunktsfel 0,3°/s på x
+  const m = new LateralMeter();
+  let seed = 3;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+  let t = 0, acc = 0;
+  m.setSpeed(12);
+  for (let sec = 0; sec < 500; sec++) {
+    for (let k = 0; k < 50; k++) { const w = kurvor(t); m.addMotion({ t, rot: mapRot(w * 180 / Math.PI), ...grav }); acc += w * 0.02; t += 0.02; }
+    m.learnInterval(acc + rnd() * 0.03);  // ±1° brus i GPS-kursen
+    acc = 0;
+  }
+  assert.ok(m.axis);
+  const k = Math.hypot(...m.axis) * 180 / Math.PI;
+  assert.ok(Math.abs(k - 1) < 0.1, `skala ${k}`);
 });
 
 test('stötar mot telefonen ignoreras', () => {

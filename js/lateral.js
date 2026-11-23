@@ -74,7 +74,14 @@ export class LateralMeter {
     this.lastRot = null;   // senaste råa gyrovektor [x, y, z] (grader/s enligt standarden)
     this.axis = null;      // inlärd: sväng höger (rad/s) = axis · rå gyrovektor
     this.axisR2 = null;
-    this.reg = { M: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b: [0, 0, 0], ee: 0, n: 0, since: 0 };
+    this.reg = { M: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b: [0, 0, 0], ee: 0, n: 0, turns: 0, since: 0 };
+    // Vridning summerad sedan förra GPS-positionen (råa gyroaxlar, grader)
+    this.rotInt = [0, 0, 0];
+    this.platInt = 0;          // samma enligt standarden (rad), för reservvägens tecken
+    this.intOk = false;
+    // Accelerometerkontroll: vågrät acceleration ur accelerationen med tyngdkraft
+    this.gravSlow = null;      // tyngdkraften utjämnad över ca 20 s
+    this.accH = 0;             // vågrät acceleration, utjämnad ca 0,7 s (m/s²)
   }
 
   setSpeed(v) { this.v = Math.max(0, v || 0); }
@@ -95,6 +102,13 @@ export class LateralMeter {
     const r = [m.rot.beta ?? 0, m.rot.gamma ?? 0, m.rot.alpha ?? 0];
     this.lastRot = r;
     this.lastPlat = this.grav ? yawFromGyro(m.rot, this.grav) : null;
+    // Summera vridningen till nästa GPS-position (stötar räknas inte)
+    if (Math.hypot(r[0], r[1], r[2]) < 120) {
+      for (let q = 0; q < 3; q++) this.rotInt[q] += r[q] * dt;
+      if (this.lastPlat != null) this.platInt += this.lastPlat * dt;
+      this.intOk = true;
+    }
+    if (m.gx != null) this.addAccel([m.gx, m.gy, m.gz], dt);
     let wRight;
     if (this.axis) wRight = this.axis[0] * r[0] + this.axis[1] * r[1] + this.axis[2] * r[2];
     else if (this.lastPlat != null) wRight = this.lastPlat * (this.sign ?? this.defaultSign);
@@ -126,22 +140,52 @@ export class LateralMeter {
    * Jämför med förväntad sväng ur rutten (rad/s, höger positiv): lär in
    * reservvägens tecken och gyrots axel.
    */
+  /**
+   * Reservvägens tecken mot förväntad vridhastighet i stunden (rad/s, höger
+   * positiv), t.ex. ur rutten. Gyrots axel lärs per GPS-intervall i
+   * learnInterval(), som är betydligt säkrare.
+   */
   learn(expectedRight) {
     if (Math.abs(expectedRight) < 0.03) return;
     if (this.lastPlat != null && Math.abs(this.lastPlat) > 0.01) {
       this.signAcc = Math.max(-1, Math.min(1, this.signAcc + expectedRight * this.lastPlat));
       if (Math.abs(this.signAcc) > 0.05) this.sign = Math.sign(this.signAcc);
     }
-    const r = this.lastRot;
-    if (!r) return;
+  }
+
+  /** Glöm vridningen sedan förra GPS-positionen (t.ex. vid stillastående eller lucka). */
+  resetInterval() {
+    this.rotInt = [0, 0, 0];
+    this.platInt = 0;
+    this.intOk = false;
+  }
+
+  /**
+   * Lär gyrots axel per GPS-intervall: hur mycket bilen svängt (rad, höger
+   * positiv) sedan förra anropet – från GPS-kursen eller rutten – jämförs med
+   * gyrots summerade vridning över samma tid. Att jämföra mätvärde för
+   * mätvärde fungerar dåligt eftersom GPS-kursen kommer en gång i sekunden
+   * och ligger efter. Minsta kvadrat över intervallen hittar axlarnas
+   * ordning, skala och tecken oavsett hur telefonen eller webbläsaren anger dem.
+   */
+  learnInterval(expectedTurn) {
+    const r = this.rotInt, plat = this.platInt, ok = this.intOk;
+    this.resetInterval();
+    if (!ok || !Number.isFinite(expectedTurn) || Math.abs(expectedTurn) > 1.2) return;
+    // Reservvägens tecken
+    if (Math.abs(expectedTurn) > 0.05 && Math.abs(plat) > 0.01) {
+      this.signAcc = Math.max(-1, Math.min(1, this.signAcc + expectedTurn * plat * 20));
+      if (Math.abs(this.signAcc) > 0.05) this.sign = Math.sign(this.signAcc);
+    }
     const R = this.reg;
     for (let i = 0; i < 3; i++) {
       for (let j = 0; j < 3; j++) R.M[i][j] += r[i] * r[j];
-      R.b[i] += r[i] * expectedRight;
+      R.b[i] += r[i] * expectedTurn;
     }
-    R.ee += expectedRight * expectedRight;
+    R.ee += expectedTurn * expectedTurn;
     R.n++;
-    if (R.n >= 100 && R.n - R.since >= 25) {
+    if (Math.abs(expectedTurn) > 3 * DEG) R.turns++;
+    if (R.turns >= 12 && R.n - R.since >= 10) {
       R.since = R.n;
       const tr = R.M[0][0] + R.M[1][1] + R.M[2][2];
       const k = solve3(R.M, R.b, 1e-3 * tr / 3);
@@ -151,8 +195,23 @@ export class LateralMeter {
       for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) kMk += k[i] * R.M[i][j] * k[j];
       const kb = k[0] * R.b[0] + k[1] * R.b[1] + k[2] * R.b[2];
       const r2 = 1 - (R.ee - 2 * kb + kMk) / R.ee;
-      if (r2 > 0.5) { this.axis = k; this.axisR2 = r2; }
+      if (r2 > 0.6) { this.axis = k; this.axisR2 = r2; }
     }
+  }
+
+  /** Accelerometerkontroll: vågrät acceleration ur accelerationen med tyngdkraft. */
+  addAccel(g, dt) {
+    if (!this.gravSlow) { this.gravSlow = g.slice(); return; }
+    const k = dt / (20 + dt);
+    this.gravSlow = this.gravSlow.map((x, i) => x + k * (g[i] - x));
+    const n = Math.hypot(...this.gravSlow);
+    if (!(n > 1)) return;
+    const up = this.gravSlow.map(x => x / n);
+    const a = g.map((x, i) => x - this.gravSlow[i]);
+    const vert = a[0] * up[0] + a[1] * up[1] + a[2] * up[2];
+    const h = Math.hypot(a[0] - vert * up[0], a[1] - vert * up[1], a[2] - vert * up[2]);
+    const kk = dt / (0.7 + dt);
+    this.accH += kk * (Math.min(h, 15) - this.accH);
   }
 
   /** Bakåtkompatibelt namn. */
@@ -174,7 +233,7 @@ export class LateralMeter {
   current() {
     const a = this.v * Math.abs(this.yaw);
     const side = -(this.v * this.yaw) / G;
-    return { a, g: a / G, yaw: this.yaw, side };
+    return { a, g: a / G, yaw: this.yaw, side, accG: this.accH / G };
   }
 }
 
@@ -236,11 +295,12 @@ export class CurveTracker {
   }
 
   /** Sidokraft (m/s²) vid tiden t; samlas i 1-sekundersfack. */
-  sample(t, a, v, yaw) {
+  sample(t, a, v, yaw, accG = null) {
     if (!this.active) return;
     const key = Math.floor(t);
-    const b = this.active.bins.get(key) || { sum: 0, n: 0 };
+    const b = this.active.bins.get(key) || { sum: 0, n: 0, acc: 0, nacc: 0 };
     b.sum += a; b.n++;
+    if (accG != null && Number.isFinite(accG)) { b.acc += accG; b.nacc++; }
     this.active.bins.set(key, b);
     if (a > this.active.peak.a) this.active.peak = { a, v, yaw };
   }
@@ -248,6 +308,8 @@ export class CurveTracker {
   finish(meter) {
     const { curve: c, bins, vmax, turn0, peak } = this.active;
     const means = [...bins.values()].map(b => b.sum / b.n);
+    const accMeans = [...bins.values()].filter(b => b.nacc).map(b => b.acc / b.nacc);
+    const accPeakG = accMeans.length ? percentile(accMeans, 0.9) : null;
     const peakA = percentile(means, 0.9);
     const plannedA = (c.v * c.v) / c.radius;
     const gyroTurn = Math.abs(meter.turn - turn0) / DEG;
@@ -263,7 +325,7 @@ export class CurveTracker {
       plannedV: c.v, plannedG, peakG, maxV: vmax,
       speedAtPeak: peak.v || vmax,
       radiusMeas: peak.yaw ? (peak.v / Math.abs(peak.yaw)) : null,
-      gyroTurn, routeTurn, valid, reason,
+      gyroTurn, routeTurn, valid, reason, accPeakG,
       ask: valid && peakG > plannedG * LATERAL.askFactor,
     };
   }

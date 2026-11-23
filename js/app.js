@@ -689,7 +689,7 @@ function startDrive() {
   drive.meter = new LateralMeter();
   // Telefonen sitter oftast likadant: börja med förra körningens inlärda axel
   const ga = store.gyroAxis;
-  if (ga && Array.isArray(ga.axis) && !plan.demo) { drive.meter.axis = ga.axis; drive.meter.axisR2 = ga.r2; }
+  if (ga && ga.method === 'interval' && Array.isArray(ga.axis) && !plan.demo) { drive.meter.axis = ga.axis; drive.meter.axisR2 = ga.r2; }
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
   drive.askQueue = [];
@@ -697,6 +697,8 @@ function startDrive() {
   drive.coastFound = 0;
   drive.coastUsed = 0;
   drive.lastReleaseT = null;
+  drive.accRatios = [];
+  drive.accWarned = false;
   drive.log = new DriveLog({
     kind: 'drive',
     dest: plan.dest ? { name: plan.dest.name, lat: plan.dest.lat, lon: plan.dest.lon } : null,
@@ -773,7 +775,7 @@ function saveDriveLog(stats = null) {
     if (seg) handleCoastSegment(seg, drive.lastObs?.t ?? Date.now() / 1000);
   }
   const m = drive.meter;
-  if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, date: new Date().toISOString() };
+  if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, method: 'interval', date: new Date().toISOString() };
   if (stats) drive.log.finish({
     ...stats, curves: (drive.curveLog || []).length,
     gyroAxis: m?.axis ? m.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
@@ -835,6 +837,36 @@ function stopDrive() {
 }
 
 // ---------- Kurvkraft ----------
+/**
+ * Lär gyrots axel per GPS-intervall. Svängen sedan förra positionen tas ur
+ * GPS-kursen (Doppler, noggrann i fart) eller, utan kurs, ur rutten.
+ * Returnerar true första gången axeln blir inlärd.
+ */
+function learnGyroFromGps(meter, prev, cur, routeTurn = null) {
+  if (!meter) return false;
+  const had = !!meter.axis;
+  const dt = prev ? cur.t - prev.t : Infinity;
+  const v = cur.speed ?? 0;
+  let turn = null;
+  if (prev && dt > 0 && dt < 2.5 && v > 3) {
+    if (cur.heading != null && prev.heading != null && (prev.speed ?? 0) > 3) {
+      turn = (((cur.heading - prev.heading + 540) % 360) - 180) * Math.PI / 180;
+    } else if (routeTurn != null) turn = routeTurn;
+  }
+  if (turn == null) { meter.resetInterval(); return false; }
+  meter.learnInterval(turn);
+  meter.setStraight(Math.abs(turn / dt) < 0.5 * Math.PI / 180);
+  return !had && !!meter.axis;
+}
+
+/** Signerad kursändring längs rutten mellan s0 och s1 (rad, höger positiv). */
+function routeTurnBetween(route, s0, s1) {
+  const i0 = Math.max(0, Math.round(s0 / route.step)), i1 = Math.min(route.n - 1, Math.round(s1 / route.step));
+  let d = 0;
+  for (let i = i0 + 1; i <= i1; i++) d += ((route.H[i] - route.H[i - 1] + 540) % 360) - 180;
+  return d * Math.PI / 180;
+}
+
 function onDriveMotion(m) {
   drive.raw?.addMotion(m);
   if (!drive.meter) return;
@@ -846,19 +878,9 @@ function onDriveMotion(m) {
 let gmeterAt = 0;
 function sampleCurve(t) {
   if (!drive.meter) return;
-  // Lär gyrots tecken av rutten (vilket håll som är höger på just den här telefonen)
-  // Lär gyrots axel och tecken mot rutten, bara när bilen rör sig och följer den
-  if (drive.engine && plan && !drive.engine.paused && drive.meter.v > 5) {
-    const hadAxis = !!drive.meter.axis;
-    drive.meter.learn(routeYaw(plan.route, drive.engine.s, drive.meter.v));
-    if (!hadAxis && drive.meter.axis && !plan.demo) {
-      store.gyroAxis = { axis: drive.meter.axis, r2: drive.meter.axisR2, date: new Date().toISOString() };
-      drive.log?.event(t, 'gyroAxis', { axis: drive.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: drive.meter.axisR2 });
-    }
-  }
   if (drive.tracker && drive.tracker.inside()) {
     const c = drive.meter.current();
-    drive.tracker.sample(t, c.a, drive.meter.v, c.yaw);
+    drive.tracker.sample(t, c.a, drive.meter.v, c.yaw, c.accG);
   }
   const now = performance.now();
   if (now - gmeterAt > 150) { gmeterAt = now; renderGMeter(); }
@@ -902,15 +924,37 @@ function trackCurves(view, obs) {
       const rec = { ...ev.record, answer: null, trailer: trailerOn() };
       drive.curveLog.push(rec);
       drive.log?.event(obs.t, 'curve', {
-        s: rec.s, dir: rec.dir, radiusM: rec.radius, radiusMeasM: rec.radiusMeas,
+        s: rec.s, dir: rec.dir, radiusM: rec.radius, radiusMeasM: rec.radiusMeas, accPeakG: rec.accPeakG,
         plannedKmh: rec.plannedV * 3.6, maxKmh: rec.maxV * 3.6, plannedG: rec.plannedG, peakG: rec.peakG,
         gyroTurnDeg: rec.gyroTurn, routeTurnDeg: rec.routeTurn, valid: rec.valid, reason: rec.reason, ask: rec.ask,
       });
       if (rec.ask && store.settings.askCurvesInDrive) drive.askQueue.push(rec);
+      checkGyroAgainstAccel(rec);
     }
   }
   renderGMeter();
   maybeAsk(view);
+}
+
+/**
+ * Kontroll: i tydliga kurvor ska gyrot och accelerometern visa ungefär samma
+ * sidokraft. Accelerometern visar normalt något mer (den får med gupp och
+ * fartändringar). Skiljer de sig mycket i flera kurvor sitter telefonen
+ * troligen löst, eller så är gyrots axel fel inlärd.
+ */
+function checkGyroAgainstAccel(rec) {
+  if (!rec.valid || rec.accPeakG == null || rec.peakG < 0.1 || drive.accWarned) return;
+  drive.accRatios = drive.accRatios || [];
+  drive.accRatios.push(rec.accPeakG / rec.peakG);
+  if (drive.accRatios.length < 5) return;
+  const s = drive.accRatios.slice().sort((a, b) => a - b), med = s[Math.floor(s.length / 2)];
+  if (med < 0.5 || med > 2.5) {
+    drive.accWarned = true;
+    drive.log?.event(drive.lastObs?.t ?? Date.now() / 1000, 'sensorMismatch', { accOverGyro: med });
+    toast(med > 2.5
+      ? 'Gyrot visar mycket mindre än accelerometern i kurvorna. Sitter telefonen fast i hållaren?'
+      : 'Accelerometern visar mycket mindre än gyrot. Sitter telefonen fast i hållaren?', true, 7000);
+  }
 }
 
 let askTimer = null;
@@ -990,9 +1034,19 @@ function applyNewCurveSpeeds() {
 
 function onDriveObs(obs) {
   if (!drive.engine || drive.rerouting) return;
+  const prevObs = drive.lastObs;
+  const prevS = drive.engine.s;
   drive.lastObs = obs;
   if (!plan.demo) drive.raw?.addGps(obs);
   const { view, events } = drive.engine.update(obs);
+  if (!plan.demo && drive.meter) {
+    const onRoute = !view.paused && view.mode !== 'paused';
+    const rt = onRoute && prevObs ? routeTurnBetween(plan.route, prevS, drive.engine.s) : null;
+    if (learnGyroFromGps(drive.meter, prevObs, obs, rt)) {
+      store.gyroAxis = { axis: drive.meter.axis, r2: drive.meter.axisR2, method: 'interval', date: new Date().toISOString() };
+      drive.log?.event(obs.t, 'gyroAxis', { axis: drive.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: drive.meter.axisR2 });
+    }
+  }
   const arrived = events.some(e => e.type === 'arrived');
   if (!arrived) trackCurves(view, obs);
   logDrive(view, obs, events);
@@ -1349,7 +1403,7 @@ async function startRecording() {
   rec.raw = new RawRecorder(rec.log.id);
   rec.meter = new LateralMeter();
   const ga = store.gyroAxis;
-  if (ga && Array.isArray(ga.axis)) { rec.meter.axis = ga.axis; rec.meter.axisR2 = ga.r2; }
+  if (ga && ga.method === 'interval' && Array.isArray(ga.axis)) { rec.meter.axis = ga.axis; rec.meter.axisR2 = ga.r2; }
   rec.savedAt = Date.now();
   rec.stops.push(keepAwake());
   rec.stops.push(watchGps(onRecGps, e => toast(e.message, true)));
@@ -1369,13 +1423,10 @@ function onRecGps(o) {
   if (rec.last && o.accuracy != null && o.accuracy < 30) {
     const d = haversine(rec.last.lat, rec.last.lon, o.lat, o.lon);
     if (d < 200) rec.dist += d;
-    const dt = o.t - rec.last.t;
-    const h1 = rec.last.heading, h2 = o.heading;
-    if (dt > 0 && dt < 3 && v > 5 && h1 != null && h2 != null) {
-      const dh = ((h2 - h1 + 540) % 360) - 180;
-      rec.courseRate = (dh * Math.PI / 180) / dt; // höger positiv
-      rec.meter.setStraight(Math.abs(dh / dt) < 0.5);
-    } else rec.courseRate = 0;
+  }
+  if (learnGyroFromGps(rec.meter, rec.last, o)) {
+    store.gyroAxis = { axis: rec.meter.axis, r2: rec.meter.axisR2, method: 'interval', date: new Date().toISOString() };
+    rec.log.event(o.t, 'gyroAxis', { axis: rec.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: rec.meter.axisR2 });
   }
   rec.last = o;
   const m = rec.meter.current();
@@ -1387,7 +1438,6 @@ function onRecMotion(m) {
   rec.raw?.addMotion(m);
   if (!rec.meter) return;
   rec.meter.addMotion(m);
-  if (rec.meter.v > 5) rec.meter.learn(rec.courseRate);
 }
 
 function renderRecording() {
@@ -1415,7 +1465,7 @@ $('rec-stop').addEventListener('click', async () => {
   rec.stops = [];
   const log = rec.log, raw = rec.raw, meter = rec.meter;
   rec.log = null; rec.raw = null;
-  if (meter?.axis) store.gyroAxis = { axis: meter.axis, r2: meter.axisR2, date: new Date().toISOString() };
+  if (meter?.axis) store.gyroAxis = { axis: meter.axis, r2: meter.axisR2, method: 'interval', date: new Date().toISOString() };
   log.finish({
     distance: rec.dist, durationS: Date.now() / 1000 - rec.startT,
     gyroAxis: meter?.axis ? meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,

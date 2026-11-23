@@ -31,7 +31,8 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Gyrot mäter bilens vridhastighet kring lodlinjen (oberoende av hur telefonen sitter); sidokraften är `a = v · ω` med farten från GPS.
 - Under kurvan visas en mätare med uppmätt mot planerad sidokraft. Var toppen mer än 15 % över planerat frågar appen efter kurvan, på rak väg: *Okej* eller *För mycket*. Obesvarade frågor finns i sammanfattningen.
 - Svaren justerar sidokraften: *För mycket* sänker direkt till strax under uppmätt, *Okej* höjer 30 % av vägen men högst 0,02 g per svar. Bil och släp lär sig var för sig.
-- Telefoner anger gyrots axlar, enheter och tecken olika. Appen lär sig därför vilken kombination av gyrots tre axlar som är "sväng" genom att jämföra med hur rutten svänger (minsta kvadrat, kräver några sekunders kurvkörning) och sparar den till nästa körning. Stötar över ca 70°/s ignoreras.
+- Telefoner anger gyrots axlar, enheter och tecken olika (en inspelning visade en webbläsare som lade x-rotationen i `alpha`). Appen lär sig därför vilken kombination av gyrots tre axlar som är "sväng": gyrots vridning summeras mellan två GPS-positioner och jämförs med GPS-kursens ändring (eller ruttens, om kursen saknas) över samma tid, med minsta kvadrat över intervallen. Det kräver ungefär en minuts körning med några svängar och sparas till nästa körning. Att jämföra mätvärde för mätvärde fungerar inte, eftersom GPS-kursen kommer en gång i sekunden och ligger efter. Stötar över ca 70°/s ignoreras.
+- Accelerometern (med tyngdkraft, tyngdkraften utjämnad över 20 s) ger en kontroll: i tydliga kurvor ska den visa ungefär samma sidokraft som gyrot. Skiljer de sig mer än en faktor 2–2,5 i fem kurvor varnar appen för lös hållare. Accelerometerns topp per kurva loggas (`accPeakG`).
 - Kurvor där gyrot och kartan inte stämmer (t.ex. lös hållare) räknas inte.
 
 ## Rullmodellen lär sig under körning
