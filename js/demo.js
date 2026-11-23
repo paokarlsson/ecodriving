@@ -44,5 +44,5 @@ export function demoData(lat0 = 57.700, lon0 = 11.970) {
     { type: 'node', id: 12, tags: { highway: 'mini_roundabout' }, ...ll(eastStart[0] + 500, eastStart[1]) },
     { type: 'node', id: 13, tags: { highway: 'give_way' }, ...ll(eastStart[0] + 1300, eastStart[1]) },
   ];
-  return { coords, elements, name: 'Demorutt (simulerad)' };
+  return { coords, elements, name: 'Testbana (simulerad)' };
 }
