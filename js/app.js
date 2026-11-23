@@ -438,9 +438,9 @@ function renderDemoRoutes() {
   ul.innerHTML = '';
   const saved = store.demoRoutes || {};
   for (const d of DEMO_ROUTES) {
-    const have = !!saved[d.id];
+    const have = !!saved[d.id] || !!d.bundled;
     const li = document.createElement('li');
-    const status = have ? 'sparad' : (store.key ? 'hämtas första gången' : 'kräver nyckel första gången');
+    const status = d.bundled ? 'inbyggd' : saved[d.id] ? 'sparad' : (store.key ? 'hämtas första gången' : 'kräver nyckel första gången');
     li.innerHTML = `<button class="pick"><strong>${esc(d.name)}</strong><br><small class="hint">${esc(d.note)} · ${esc(status)}</small></button>`;
     const btn = li.querySelector('button');
     btn.disabled = !have && !store.key;
@@ -594,6 +594,13 @@ async function planDemoRoute(d) {
   $('ov-fav').hidden = true;
   try {
     let saved = (store.demoRoutes || {})[d.id];
+    if (!saved && d.bundled) {
+      // Inbyggd demorutt: rutt (och ev. vägdata) följer med appen
+      step('Läser in demorutten…');
+      const res = await fetch(d.bundled);
+      if (!res.ok) throw new Error('Demorutten gick inte att läsa in.');
+      saved = await res.json();
+    }
     if (!saved) {
       if (!store.key) throw new Error('Lägg till en nyckel för att hämta demorutten första gången.');
       step('Hämtar rutt…');
@@ -601,7 +608,7 @@ async function planDemoRoute(d) {
       saved = { coords: compactCoords(r.coords), distance: r.distance, duration: r.duration, fetched: new Date().toISOString() };
       store.demoRoutes = { ...(store.demoRoutes || {}), [d.id]: saved };
     }
-    const p = await prepare(saved.coords, null, step);
+    const p = await prepare(saved.coords, saved.osm || null, step);
     plan = { dest: { name: d.name }, ...p, duration: saved.duration, demo: true, demoReal: true, demoId: d.id };
     renderOverview();
   } catch (e) {

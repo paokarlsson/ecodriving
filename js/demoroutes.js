@@ -3,7 +3,8 @@
 // bil den, även utan täckning.
 
 export const DEMO_ROUTES = [
-  { id: 'ost-brunflo', name: 'Östersund → Brunflo', note: 'E14, landsväg 90 km/h, ca 20 km',
+  { id: 'ost-brunflo', name: 'Stortorget → Brunflo', note: 'Stad, rondeller och E14, ca 18 km',
+    bundled: 'demo/ost-brunflo.json', // inbyggd: fungerar utan nyckel och utan nät
     from: { name: 'Stortorget, Östersund', lat: 63.1771, lon: 14.6378 },
     to: { name: 'Brunflo centrum', lat: 63.0757, lon: 14.8220 } },
   { id: 'are-duved', name: 'Åre → Duved', note: 'Fjällväg med backar, ca 9 km',
