@@ -1,6 +1,5 @@
 // Uppmätt sidokraft i kurvor: gyro + GPS-fart, jämförelse med planerat
 // och inlärning av förarens komfortnivå. Ren logik utan DOM.
-import { comfortLatAccel } from './route.js';
 import { angleDiff } from './geo.js';
 
 const G = 9.81;
@@ -13,9 +12,6 @@ export const LATERAL = {
   askFactor: 1.15,     // fråga när toppen är mer än 15 % över planerat
   maxMismatch: 0.30,   // gyrots och kartans svängvinkel får skilja högst 30 %
   minTurnForCheck: 15, // grader; kortare svängar kontrolleras inte
-  learnUp: 0.3,        // "Okej" flyttar 30 % mot uppmätt …
-  maxStepUp: 0.02 * G, // … men höjer högst 0,02 g per svar
-  downMargin: 0.02 * G,// "För mycket" sätter högst uppmätt − 0,02 g
 };
 
 /**
@@ -329,20 +325,6 @@ export class CurveTracker {
       ask: valid && peakG > plannedG * LATERAL.askFactor,
     };
   }
-}
-
-/**
- * Ny inställd sidokraft (m/s², grundnivå ≤ 50 km/h) efter ett svar.
- * Snabbt ner, långsamt upp. Uppmätt kraft räknas om till grundnivån
- * eftersom appen tillåter mindre sidokraft i högre fart.
- */
-export function learnALat(current, record, answer, { min = 0.15 * G, max = 0.35 * G } = {}) {
-  const factor = comfortLatAccel(record.speedAtPeak, 1);
-  const x = (record.peakG * G) / factor;
-  let next = current;
-  if (answer === 'ok' && x > current) next = current + Math.min(LATERAL.maxStepUp, LATERAL.learnUp * (x - current));
-  if (answer === 'too_much') next = Math.min(current, x - LATERAL.downMargin);
-  return Math.max(min, Math.min(max, next));
 }
 
 /** Rak väg kring s: kursändringen ±30 m är under 3°. */

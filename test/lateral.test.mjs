@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { yawFromGyro, LateralMeter, CurveTracker, learnALat, routeYaw, isStraightAt } from '../js/lateral.js';
+import { yawFromGyro, LateralMeter, CurveTracker, routeYaw, isStraightAt } from '../js/lateral.js';
 import { buildRoute, curveTargets } from '../js/route.js';
 import { demoData } from '../js/demo.js';
 
@@ -73,24 +73,6 @@ test('gyro som inte stämmer med kartan underkänns', () => {
   }
   assert.equal(rec.valid, false);
   assert.equal(rec.ask, false);
-});
-
-test('inlärning: snabbt ner, långsamt upp (designens exempel)', () => {
-  const rec = g => ({ peakG: g, speedAtPeak: 40 / 3.6 });
-  let a = 0.25 * G;
-  a = learnALat(a, rec(0.31), 'ok'); assert.ok(Math.abs(a / G - 0.268) < 0.001, a / G);
-  a = learnALat(a, rec(0.30), 'ok'); assert.ok(Math.abs(a / G - 0.2776) < 0.001, a / G);
-  a = learnALat(a, rec(0.29), 'too_much'); assert.ok(Math.abs(a / G - 0.27) < 0.001, a / G);
-  a = learnALat(a, rec(0.28), 'ok'); assert.ok(Math.abs(a / G - 0.273) < 0.001, a / G);
-  // Ett okej vid mycket hög kraft höjer högst 0,02 g
-  assert.ok(Math.abs(learnALat(0.25 * G, rec(0.47), 'ok') / G - 0.27) < 1e-9);
-  // Okej under nuvarande nivå höjer inte
-  assert.equal(learnALat(a, rec(0.2), 'ok'), a);
-  // Gränser
-  assert.ok(learnALat(0.25 * G, rec(0.1), 'too_much') >= 0.15 * G - 1e-9);
-  // Svar i hög fart räknas om till grundnivån (högre)
-  const fast = learnALat(0.25 * G, { peakG: 0.2, speedAtPeak: 110 / 3.6 }, 'ok');
-  assert.ok(fast > 0.25 * G, 'okej vid 0,2 g i 110 km/h motsvarar > 0,25 g i låg fart');
 });
 
 test('raksträcka känns igen', () => {

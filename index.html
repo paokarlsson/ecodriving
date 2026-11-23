@@ -58,8 +58,6 @@
     </div>
     <div class="content key-demo">
       <h2 class="section-title">Demo</h2>
-      <p class="hint">Demokörning på en riktig väg: körskärmen ser ut som vid en vanlig körning, men en simulerad förare kör. Den håller gränsen, högst 120 km/h där gräns saknas och högst 0,25 g i kurvorna. Prova direkt: den inbyggda rutten fungerar utan nyckel, övriga hämtas första gången med nyckeln.</p>
-      <ul id="demo-routes" class="list"></ul>
       <button class="btn ghost" id="demo-btn">Kort testbana (ingen nyckel behövs)</button>
     </div>
   </section>
@@ -88,7 +86,6 @@
   <section class="screen" id="calib" hidden>
     <header class="bar"><button class="icon-btn back" data-back aria-label="Tillbaka">‹</button><h1>Kalibrering (rullprov)</h1></header>
     <div class="content">
-      <p class="hint" id="calib-profile"></p>
       <div id="calib-intro">
         <p>Ett rullprov lär appen hur långt just din bil rullar när du släpper gasen.</p>
         <ol class="steps">
@@ -194,15 +191,6 @@
         <span class="gm-ball" id="d-gball"></span>
       </div>
     </div>
-    <div class="ask-card" id="d-ask" hidden role="dialog" aria-labelledby="d-ask-q">
-      <div class="ask-q" id="d-ask-q">Kurvan tog 0,31 g. Var det okej?</div>
-      <div class="ask-m" id="d-ask-m"></div>
-      <div class="ask-btns">
-        <button class="btn primary" id="d-ask-ok">Okej</button>
-        <button class="btn danger-fill" id="d-ask-no">För mycket</button>
-      </div>
-      <div class="ask-timer"><i id="d-ask-timer"></i></div>
-    </div>
     <canvas id="d-map" class="map drive-map" aria-hidden="true"></canvas>
     <div class="actions drive-actions">
       <button class="btn ghost" id="d-stop">Avsluta</button>
@@ -281,36 +269,11 @@
         <button class="btn small ghost" id="set-test-sound">Testa ljud</button>
       </div>
 
-      <h2 class="section-title">Kurvkraft</h2>
-      <div class="card">
-        <p id="set-learn-show">Sidokraft 0,25 g.</p>
-        <label class="field check">
-          <input type="checkbox" id="set-learn"> <span>Lär av mina svar</span>
-        </label>
-        <label class="field check">
-          <input type="checkbox" id="set-ask"> <span>Fråga direkt efter kurvan</span>
-        </label>
-        <small class="hint">Gyrot mäter sidokraften i varje kurva. Var den mer än 15 % över planerat frågar appen om det var okej. Av = frågorna ställs i sammanfattningen.</small>
-        <div class="row" style="margin-top:10px"><button class="btn small ghost danger" id="set-learn-reset">Återställ inlärd sidokraft</button></div>
-      </div>
-
       <h2 class="section-title">Släpvagn</h2>
       <div class="card">
         <label class="field check">
-          <input type="checkbox" id="set-trailer"> <span>Släpvagnsläge</span>
+          <input type="checkbox" id="set-trailer"> <span>Släpvagn (max 80 km/h)</span>
         </label>
-        <label class="field range">
-          <span>Högsta fart med släp <output id="set-tmax-out"></output></span>
-          <input type="range" id="set-tmax" min="40" max="100" step="10">
-          <small>Personbil med släpvagn: högst 80 km/h. Obromsad släpvagn som väger mer än halva bilens tjänstevikt: högst 40 km/h. Lägre skyltad gräns gäller alltid.</small>
-        </label>
-        <label class="field range">
-          <span>Sidokraft i kurvor med släp <output id="set-talat-out"></output></span>
-          <input type="range" id="set-talat" min="0.10" max="0.30" step="0.01">
-          <small>Lägre än utan släp ger marginal mot slingring.</small>
-        </label>
-        <p id="set-tcalib-show">Släpet är inte kalibrerat.</p>
-        <button class="btn small" id="set-tcalib-redo">Gör rullprov med släpet</button>
       </div>
 
       <h2 class="section-title">Data</h2>

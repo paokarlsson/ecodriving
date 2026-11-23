@@ -8,8 +8,8 @@ import { DEFAULT_MODEL } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
 import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
-import { estimateTrailerModel, trailerLimits } from './trailer.js';
-import { LateralMeter, CurveTracker, learnALat, isStraightAt, routeYaw } from './lateral.js';
+import { trailerLimits, TRAILER_MAX_KMH } from './trailer.js';
+import { LateralMeter, CurveTracker, isStraightAt, routeYaw } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
 import { RawRecorder, readRaw, deleteRaw, persistStorage } from './rawstore.js';
 import { CoastLearner, CoastStats, acceptSegment } from './coastlearn.js';
@@ -21,8 +21,7 @@ const safeStorage = {
   removeItem: k => { try { localStorage.removeItem(k); } catch { /* blockerad */ } },
 };
 const logStore = makeLogStore(safeStorage, { onRemove: id => deleteRaw(id) });
-import { SimCar, RealCar, seededRandom } from './sim.js';
-import { DEMO_ROUTES, compactCoords } from './demoroutes.js';
+import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
 import { unlockAudio, sounds, speak } from './audio.js';
 import {
@@ -114,7 +113,6 @@ function enterKey() {
   $('key-input').value = store.key || '';
   $('key-status').hidden = true;
   $('key-skip').hidden = !onboarding;
-  renderDemoRoutes();
 }
 function keyStatus(cls, html) {
   const s = $('key-status');
@@ -176,9 +174,6 @@ const calib = { runs: [], rec: null, stops: [], result: null, lastObs: null };
 
 function enterCalib() {
   if (calib.rec && calib.rec.state === 'recording') return;
-  $('calib-profile').textContent = trailerOn()
-    ? 'Släpvagnsläget är på: provet görs med släpet kopplat och sparas för släpet.'
-    : 'Provet görs utan släp. Slå på släpvagnsläget först om du ska kalibrera med släp.';
   calib.runs = [];
   calib.result = null;
   renderCalibIdle();
@@ -216,7 +211,7 @@ $('calib-start').addEventListener('click', async () => {
   $('calib-result').hidden = true;
   $('calib-save').hidden = true;
   $('calib-live').hidden = false;
-  $('calib-run').textContent = `Prov ${n} av 2${trailerOn() ? ' · med släpvagn' : ''}`;
+  $('calib-run').textContent = `Prov ${n} av 2`;
   $('calib-speed').textContent = '–';
   $('calib-start').hidden = true;
   $('calib-later').hidden = true;
@@ -337,7 +332,7 @@ $('calib-save').addEventListener('click', () => {
   const c = calib.pendingSave || calib.result;
   if (!c) return;
   const saved = { A: c.A, C: c.C, r2: c.r2, runs: c.runs, date: new Date().toISOString() };
-  if (trailerOn()) store.calibrationTrailer = saved; else store.calibration = saved;
+  store.calibration = saved;
   calib.pendingSave = null;
   calib.runs = [];
   toast('Kalibreringen är sparad i telefonen.');
@@ -355,14 +350,9 @@ $('calib-later').addEventListener('click', () => {
 
 // ---------- Hem ----------
 const trailerOn = () => !!store.settings.trailer;
-/** Kalibrering för aktuellt läge (bil eller bil med släp), eller null. */
-function activeCalibration() { return trailerOn() ? store.calibrationTrailer : store.calibration; }
-/** Modell från rullprovet (eller typvärden / uppskattning för släp). */
-function baseModel() {
-  if (trailerOn()) return store.calibrationTrailer || estimateTrailerModel(store.calibration || DEFAULT_MODEL);
-  return store.calibration || DEFAULT_MODEL;
-}
-const coastKey = () => (trailerOn() ? 'trailer' : 'car');
+/** Modell från rullprovet (eller typvärden). */
+function baseModel() { return store.calibration || DEFAULT_MODEL; }
+const coastKey = () => 'car';
 function coastStats() { return new CoastStats((store.coastLearn || {})[coastKey()] || {}); }
 /** Modellen som används: rullprovet förfinat av inlärda rullningar. */
 function model() {
@@ -371,11 +361,11 @@ function model() {
   const fit = coastStats().fit(base);
   return fit ? { ...base, A: fit.A, C: fit.C, coastSegments: fit.segments } : base;
 }
-const isCalibrated = () => !!(trailerOn() ? store.calibrationTrailer : store.calibration);
-/** Inställningar som påverkar fartmålen; med släp gäller släpets sidokraft och maxfart. */
+const isCalibrated = () => !!store.calibration;
+/** Inställningar som påverkar fartmålen; med släp gäller högst 80 km/h. */
 function planSettings() {
   const s = store.settings;
-  return s.trailer ? { ...s, aLat: s.trailerALat, maxKmh: s.trailerMaxKmh } : s;
+  return s.trailer ? { ...s, maxKmh: TRAILER_MAX_KMH } : s;
 }
 /** Fartmål ur vägdata för aktuellt läge. Kan räknas om utan ny hämtning. */
 function computeTargets(p) {
@@ -387,13 +377,13 @@ function computeTargets(p) {
 }
 
 function enterHome() {
-  const c = activeCalibration();
+  const c = store.calibration;
   const tr = trailerOn();
   $('home-calib').innerHTML =
-    `<button class="chip ${tr ? 'on' : ''}" id="chip-trailer" aria-pressed="${tr}">${tr ? `Med släpvagn · max ${store.settings.trailerMaxKmh} km/h` : 'Utan släpvagn'}</button>` +
+    `<button class="chip ${tr ? 'on' : ''}" id="chip-trailer" aria-pressed="${tr}">${tr ? `Med släpvagn · max ${TRAILER_MAX_KMH} km/h` : 'Utan släpvagn'}</button>` +
     (c
-      ? `<button class="chip ok" id="chip-calib">✓ ${tr ? 'Släp kalibrerat' : 'Kalibrerad'} · ${esc(describeModel(model()))}</button>`
-      : `<button class="chip todo" id="chip-calib">${tr ? 'Släpet är inte kalibrerat – gör ett rullprov' : 'Inte kalibrerad – gör ett rullprov'}</button>`);
+      ? `<button class="chip ok" id="chip-calib">✓ Kalibrerad · ${esc(describeModel(model()))}</button>`
+      : `<button class="chip todo" id="chip-calib">Inte kalibrerad – gör ett rullprov</button>`);
   $('chip-calib').addEventListener('click', () => show('calib'));
   $('chip-trailer').addEventListener('click', () => { setTrailer(!trailerOn()); enterHome(); });
   if (store.key) locationGranted().then(ok => { if (ok) startPosition().catch(() => {}); });
@@ -404,7 +394,7 @@ function enterHome() {
 
 function setTrailer(on) {
   store.settings = { ...store.settings, trailer: on };
-  toast(on ? `Släpvagnsläge: max ${store.settings.trailerMaxKmh} km/h och mjukare kurvor.` : 'Släpvagnsläge av.');
+  toast(on ? `Släpvagnsläge: max ${TRAILER_MAX_KMH} km/h.` : 'Släpvagnsläge av.');
 }
 
 $('home-addkey').addEventListener('click', () => show('key'));
@@ -433,22 +423,6 @@ $('search-form').addEventListener('submit', async e => {
     toast(err.message, true);
   }
 });
-
-function renderDemoRoutes() {
-  const ul = $('demo-routes');
-  ul.innerHTML = '';
-  const saved = store.demoRoutes || {};
-  for (const d of DEMO_ROUTES) {
-    const have = !!saved[d.id] || !!d.bundled;
-    const li = document.createElement('li');
-    const status = d.bundled ? 'inbyggd' : saved[d.id] ? 'sparad' : (store.key ? 'hämtas första gången' : 'kräver nyckel första gången');
-    li.innerHTML = `<button class="pick"><strong>${esc(d.name)}</strong><br><small class="hint">${esc(d.note)} · ${esc(status)}</small></button>`;
-    const btn = li.querySelector('button');
-    btn.disabled = !have && !store.key;
-    btn.addEventListener('click', () => planDemoRoute(d));
-    ul.appendChild(li);
-  }
-}
 
 function renderFavorites() {
   renderRecents();
@@ -582,42 +556,6 @@ async function planDemo() {
 }
 $('demo-btn').addEventListener('click', planDemo);
 
-/** Demorutt på riktig väg: hämtas en gång med nyckeln och sparas. */
-async function planDemoRoute(d) {
-  store.lastTrip = { dest: null, demo: true, demoId: d.id, stage: 'overview', at: Date.now() };
-  show('overview');
-  $('ov-title').textContent = d.name;
-  const step = text => { $('ov-summary').innerHTML = `<span><span class="spinner"></span>${esc(text)}</span>`; };
-  $('ov-counts').innerHTML = '';
-  $('ov-warn').hidden = true;
-  $('ov-start').disabled = true;
-  $('ov-fav').hidden = true;
-  try {
-    let saved = (store.demoRoutes || {})[d.id];
-    if (!saved && d.bundled) {
-      // Inbyggd demorutt: rutt (och ev. vägdata) följer med appen
-      step('Läser in demorutten…');
-      const res = await fetch(d.bundled);
-      if (!res.ok) throw new Error('Demorutten gick inte att läsa in.');
-      saved = await res.json();
-    }
-    if (!saved) {
-      if (!store.key) throw new Error('Lägg till en nyckel för att hämta demorutten första gången.');
-      step('Hämtar rutt…');
-      const r = await getRoute(store.key, d.from, d.to);
-      saved = { coords: compactCoords(r.coords), distance: r.distance, duration: r.duration, fetched: new Date().toISOString() };
-      store.demoRoutes = { ...(store.demoRoutes || {}), [d.id]: saved };
-    }
-    const p = await prepare(saved.coords, saved.osm || null, step);
-    plan = { dest: { name: d.name }, ...p, duration: saved.duration, demo: true, demoReal: true, demoId: d.id };
-    renderOverview();
-  } catch (e) {
-    $('ov-summary').textContent = '';
-    toast(e.message || 'Kunde inte hämta demorutten', true, 6000);
-    back();
-  }
-}
-
 function renderOverview() {
   const { route, targets, dest, duration, warnings } = plan;
   $('ov-title').textContent = dest.name;
@@ -632,15 +570,13 @@ function renderOverview() {
   $('ov-counts').innerHTML = order.filter(k => c[k]).map(k =>
     `<li><i style="background:${KIND_COLOR[k]}"></i>${c[k]} ${esc(c[k] > 1 ? PLURAL[k] : kindLabel(k))}${esc(legendExtra(k))}</li>`).join('');
   const w = [...(warnings || [])];
-  if (trailerOn()) {
-    if (!store.calibrationTrailer) w.push('Släpet är inte kalibrerat – uppskattade värden utifrån bilen används. Gör ett rullprov med släpet för bättre precision.');
-  } else if (!store.calibration) w.push('Bilen är inte kalibrerad – typvärden används. Gör ett rullprov för bättre precision.');
-  if (plan.demo && !plan.demoReal) w.push('Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
+  if (!store.calibration) w.push('Bilen är inte kalibrerad – typvärden används. Gör ett rullprov för bättre precision.');
+  if (plan.demo) w.push('Demoläge: bilen simuleras i fyrdubbel fart. Ingen GPS används.');
   $('ov-warn').innerHTML = w.map(esc).join('<br>');
   $('ov-warn').hidden = !w.length;
   $('ov-start').disabled = false;
   $('ov-trailer').checked = trailerOn();
-  $('ov-trailer-text').textContent = `Släpvagn (max ${store.settings.trailerMaxKmh} km/h, mjukare kurvor)`;
+  $('ov-trailer-text').textContent = `Släpvagn (max ${TRAILER_MAX_KMH} km/h)`;
   $('ov-fav').hidden = plan.demo || store.favorites.some(f => f.name === dest.name);
   requestAnimationFrame(() => drawOverview($('ov-map'), route, targets));
 }
@@ -697,7 +633,6 @@ function startDrive() {
   if (ga && ga.method === 'interval' && Array.isArray(ga.axis) && !plan.demo) { drive.meter.axis = ga.axis; drive.meter.axisR2 = ga.r2; }
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
-  drive.askQueue = [];
   drive.coast = new CoastLearner(model());
   drive.coastFound = 0;
   drive.coastUsed = 0;
@@ -715,30 +650,23 @@ function startDrive() {
   drive.logSavedAt = Date.now();
   drive.raw = plan.demo ? null : new RawRecorder(drive.log.id);
   if (drive.raw) { persistStorage(); recordApi(); }
-  hideAsk();
   show('drive');
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
   drive.stops.push(keepAwake());
   $('d-simspeed').hidden = !plan.demo;
   if (plan.demo) {
     drive.meter.defaultSign = 1; // simulerat gyro har redan höger positiv
-    if (plan.demoReal) {
-      drive.sim = new RealCar(plan.route, plan.targets, plan.limits, plan.curves, model(), { rand: seededRandom() });
-    } else {
-      drive.sim = new SimCar(plan.route, plan.limits, model());
-    }
+    drive.sim = new SimCar(plan.route, plan.limits, model());
     const tick = () => {
       if (!drive.sim) return;
-      const obs = drive.sim instanceof RealCar ? drive.sim.step(1) : drive.sim.step(1, plan.targets);
+      const obs = drive.sim.step(1, plan.targets);
       // Simulerat gyro: bilens vridhastighet ur ruttens form
       drive.meter.setSpeed(obs.speed);
-      const yaw = drive.sim instanceof RealCar ? drive.sim.yaw(routeYaw) : routeYaw(plan.route, drive.sim.s, obs.speed, 10);
-      drive.meter.addYaw(obs.t, yaw, 1);
+      drive.meter.addYaw(obs.t, routeYaw(plan.route, drive.sim.s, obs.speed, 10), 1);
       sampleCurve(obs.t);
       onDriveObs(obs);
     };
-    // Demo på riktig väg går i verklig fart, som en vanlig körning
-    drive.simSpeed = drive.simSpeed || (plan.demoReal ? 1 : 4);
+    drive.simSpeed = drive.simSpeed || 4;
     $('d-simspeed').textContent = `${drive.simSpeed}×`;
     drive.simTimer = setInterval(tick, 1000 / drive.simSpeed);
     drive.simTick = tick;
@@ -766,9 +694,7 @@ function routeMeta(p) {
 }
 
 function modelSource() {
-  const base = trailerOn()
-    ? (store.calibrationTrailer ? 'rullprov med släp' : 'uppskattad från bilen')
-    : (store.calibration ? 'rullprov' : 'typvärden');
+  const base = store.calibration ? 'rullprov' : 'typvärden';
   const n = store.settings.learnCoast ? coastStats().segments : 0;
   return n ? `${base} + ${n} rullningar` : base;
 }
@@ -787,7 +713,6 @@ function saveDriveLog(stats = null) {
     gyroAxis: m?.axis ? m.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
     gyroAxisR2: m?.axisR2 ?? null, gyroSign: m?.sign ?? null,
     coastFound: drive.coastFound ?? 0, coastUsed: drive.coastUsed ?? 0,
-    sim: drive.sim instanceof RealCar ? { ...drive.sim.stats, trueModel: drive.sim.trueModel, offsetKmh: drive.sim.offset * 3.6 } : null,
     modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
   logStore.save(drive.log);
@@ -839,7 +764,6 @@ function stopDrive() {
   drive.stops.forEach(f => f());
   drive.stops = [];
   drive.sim = null;
-  hideAsk();
 }
 
 // ---------- Kurvkraft ----------
@@ -927,19 +851,17 @@ function trackCurves(view, obs) {
   drive.meter.setStraight(v < 0.5 || isStraightAt(plan.route, s));
   for (const ev of drive.tracker.update(s, obs.t, v, drive.meter)) {
     if (ev.type === 'exit') {
-      const rec = { ...ev.record, answer: null, trailer: trailerOn() };
+      const rec = { ...ev.record, trailer: trailerOn() };
       drive.curveLog.push(rec);
       drive.log?.event(obs.t, 'curve', {
         s: rec.s, dir: rec.dir, radiusM: rec.radius, radiusMeasM: rec.radiusMeas, accPeakG: rec.accPeakG,
         plannedKmh: rec.plannedV * 3.6, maxKmh: rec.maxV * 3.6, plannedG: rec.plannedG, peakG: rec.peakG,
         gyroTurnDeg: rec.gyroTurn, routeTurnDeg: rec.routeTurn, valid: rec.valid, reason: rec.reason, ask: rec.ask,
       });
-      if (rec.ask && store.settings.askCurvesInDrive) drive.askQueue.push(rec);
       checkGyroAgainstAccel(rec);
     }
   }
   renderGMeter();
-  maybeAsk(view);
 }
 
 /**
@@ -961,81 +883,6 @@ function checkGyroAgainstAccel(rec) {
       ? 'Gyrot visar mycket mindre än accelerometern i kurvorna. Sitter telefonen fast i hållaren?'
       : 'Accelerometern visar mycket mindre än gyrot. Sitter telefonen fast i hållaren?', true, 7000);
   }
-}
-
-let askTimer = null;
-/** Frågan visas bara på rak väg, inte nära en kurva eller en släpp-signal. */
-function maybeAsk(view) {
-  if (!$('d-ask').hidden || !drive.askQueue.length) return;
-  const s = view.s || 0;
-  if (drive.tracker.inside()) return;
-  if ((plan.curves || []).some(c => c.s > s && c.s - s < 150)) return;
-  if (view.distToRelease != null && view.distToRelease < 300) return;
-  if (Date.now() < drive.flashUntil) return;
-  showAsk(drive.askQueue.shift());
-}
-
-function showAsk(rec) {
-  drive.asking = rec;
-  $('d-ask-q').textContent = `Kurvan tog ${fmtG(rec.peakG)}. Var det okej?`;
-  $('d-ask-m').textContent = `planerat ${fmtG(rec.plannedG)} · ${kmh(rec.maxV)} km/h i ${kmh(rec.plannedV)}-kurva`;
-  $('d-ask').hidden = false;
-  const bar = $('d-ask-timer');
-  bar.style.transition = 'none';
-  bar.style.width = '100%';
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    bar.style.transition = 'width 10s linear';
-    bar.style.width = '0%';
-  }));
-  clearTimeout(askTimer);
-  askTimer = setTimeout(hideAsk, 10000);
-}
-
-function hideAsk() {
-  clearTimeout(askTimer);
-  $('d-ask').hidden = true;
-  drive.asking = null;
-}
-
-$('d-ask-ok').addEventListener('click', () => { if (drive.asking) answerCurve(drive.asking, 'ok'); hideAsk(); });
-$('d-ask-no').addEventListener('click', () => { if (drive.asking) answerCurve(drive.asking, 'too_much'); hideAsk(); });
-
-/** Sparar svaret och justerar sidokraften (om inlärning är på). */
-function answerCurve(rec, answer) {
-  rec.answer = answer;
-  const st = store.settings;
-  store.curveAnswers = [...store.curveAnswers, {
-    date: new Date().toISOString(), answer, peakG: rec.peakG, plannedG: rec.plannedG,
-    speed: rec.speedAtPeak, radius: rec.radius, trailer: rec.trailer,
-  }];
-  const logAnswer = extra => {
-    if (!drive.log) return;
-    drive.log.event(drive.lastObs?.t ?? Date.now() / 1000, 'answer', { curveS: rec.s, answer, peakG: rec.peakG, plannedG: rec.plannedG, ...extra });
-    if (!drive.engine) saveDriveLog(); // efter resan: spara direkt
-  };
-  if (!st.learnCurves) { logAnswer({ learned: false }); return; }
-  const key = rec.trailer ? 'trailerALat' : 'aLat';
-  const bounds = rec.trailer ? { min: 0.10 * 9.81, max: 0.30 * 9.81 } : { min: 0.15 * 9.81, max: 0.35 * 9.81 };
-  const before = st[key];
-  const after = Math.round(learnALat(before, rec, answer, bounds) * 1000) / 1000;
-  const counts = store.curveLearn;
-  counts[rec.trailer ? 'trailer' : 'car'] = (counts[rec.trailer ? 'trailer' : 'car'] || 0) + 1;
-  store.curveLearn = counts;
-  logAnswer({ aLatBeforeG: before / 9.81, aLatAfterG: after / 9.81 });
-  if (Math.abs(after - before) < 0.001) return;
-  store.settings = { ...store.settings, [key]: after };
-  toast(`Sidokraft i kurvor: ${fmtG(after / 9.81)} (var ${fmtG(before / 9.81)}).`);
-  // Gäller resten av resan om den pågår och avser samma läge
-  if (plan && drive.engine && rec.trailer === trailerOn()) applyNewCurveSpeeds();
-}
-
-function applyNewCurveSpeeds() {
-  const eng = drive.engine;
-  plan = computeTargets(plan);
-  const passed = (eng.coast ? eng.coast.target.s : eng.s) + 1;
-  eng.targets = plan.targets;
-  eng.fired = new Set(plan.targets.filter(t => t.s <= passed).map(t => t.id));
-  drive.tracker.setCurves(plan.curves, planSettings().aLat);
 }
 
 function onDriveObs(obs) {
@@ -1098,7 +945,6 @@ function say(text) {
 function handleDriveEvent(ev, obs) {
   switch (ev.type) {
     case 'release':
-      hideAsk(); // signalen går före; frågan finns kvar i sammanfattningen
       if (!drive.muted) { ev.brakeNeeded ? sounds.warn() : sounds.release(); }
       setTimeout(() => say(releaseMessage(ev)), 550);
       drive.flashUntil = Date.now() + 2500;
@@ -1306,16 +1152,10 @@ function renderCurveSummary() {
     const meta = rec.valid
       ? `${fmtG(rec.peakG)} · planerat ${fmtG(rec.plannedG)} · högst ${kmh(rec.maxV)} km/h`
       : `Inte mätt: ${rec.reason}`;
-    let right;
-    if (rec.answer === 'ok') right = '<span class="curve-chip ok">Okej</span>';
-    else if (rec.answer === 'too_much') right = '<span class="curve-chip over">För mycket</span>';
-    else if (rec.ask) right = '<span class="curve-answer"><button class="btn small" data-a="ok">Okej</button><button class="btn small danger-fill" data-a="too_much">För mycket</button></span>';
-    else right = `<span class="curve-chip">${rec.valid ? 'inom planerat' : '–'}</span>`;
+    const right = rec.ask
+      ? '<span class="curve-chip over">över planerat</span>'
+      : `<span class="curve-chip">${rec.valid ? 'inom planerat' : '–'}</span>`;
     li.innerHTML = `<span class="curve-name">${esc(name)}</span>${right}<span class="curve-meta">${esc(meta)}</span>`;
-    li.querySelectorAll('button[data-a]').forEach(b => b.addEventListener('click', () => {
-      answerCurve(rec, b.dataset.a);
-      renderCurveSummary();
-    }));
     ul.appendChild(li);
   }
 }
@@ -1342,15 +1182,6 @@ function enterSettings() {
   bindRange('set-rb', 'roundaboutKmh', v => `${v} km/h`, s);
   $('set-voice').checked = s.voice;
   $('set-trailer').checked = s.trailer;
-  $('set-learn').checked = s.learnCurves;
-  $('set-ask').checked = s.askCurvesInDrive;
-  renderLearnShow();
-  bindRange('set-tmax', 'trailerMaxKmh', v => `${v} km/h`, s);
-  bindGForce(s, 'set-talat', 'trailerALat');
-  const ct = store.calibrationTrailer;
-  $('set-tcalib-show').textContent = ct
-    ? `Släpet: ${describeModel(ct)}. Kalibrerat ${new Date(ct.date).toLocaleDateString('sv-SE')}.`
-    : 'Släpet är inte kalibrerat – uppskattas från bilens värden.';
 }
 /** Komfort i kurvor visas i g men sparas som m/s². */
 function bindGForce(s, id, key) {
@@ -1377,21 +1208,6 @@ function bindRange(id, key, fmt, s) {
   };
 }
 $('set-voice').addEventListener('change', e => { store.settings = { ...store.settings, voice: e.target.checked }; });
-function renderLearnShow() {
-  const s = store.settings, n = store.curveLearn;
-  const car = `Utan släp: ${fmtG(s.aLat / 9.81)}${n.car ? ` · inlärd från ${n.car} svar` : ''}`;
-  const tr = `Med släp: ${fmtG(s.trailerALat / 9.81)}${n.trailer ? ` · inlärd från ${n.trailer} svar` : ''}`;
-  $('set-learn-show').textContent = `${car}. ${tr}.`;
-}
-$('set-learn').addEventListener('change', e => { store.settings = { ...store.settings, learnCurves: e.target.checked }; });
-$('set-ask').addEventListener('change', e => { store.settings = { ...store.settings, askCurvesInDrive: e.target.checked }; });
-$('set-learn-reset').addEventListener('click', () => {
-  store.settings = { ...store.settings, aLat: DEFAULT_SETTINGS.aLat, trailerALat: DEFAULT_SETTINGS.trailerALat };
-  store.curveLearn = { car: 0, trailer: 0 };
-  store.curveAnswers = [];
-  enterSettings();
-  toast('Sidokraften är återställd till 0,25 g (släp 0,18 g).');
-});
 
 $('set-logs').addEventListener('click', () => show('logs'));
 
@@ -1562,10 +1378,6 @@ async function shareLog(log) {
 }
 
 $('set-trailer').addEventListener('change', e => { setTrailer(e.target.checked); });
-$('set-tcalib-redo').addEventListener('click', () => {
-  if (!trailerOn()) setTrailer(true);
-  show('calib');
-});
 /** Länk till appen med nyckeln som parameter: ?key=… */
 function shareLinkWithKey() {
   const url = new URL(location.href);
@@ -1609,7 +1421,7 @@ function renderCoastShow() {
   const learned = store.settings.learnCoast && st.segments
     ? ` Förfinad av ${st.segments} rullningar (${st.points} mätpunkter).`
     : ' Inga inlärda rullningar ännu.';
-  $('set-coast-show').textContent = `${describeModel(m)}. A = ${fmt(m.A)} m/s², C = ${m.C.toFixed(5).replace('.', ',')} 1/m${trailerOn() ? ' (släp)' : ''}.${learned}`;
+  $('set-coast-show').textContent = `${describeModel(m)}. A = ${fmt(m.A)} m/s², C = ${m.C.toFixed(5).replace('.', ',')} 1/m.${learned}`;
   $('set-coast').checked = store.settings.learnCoast;
 }
 $('set-coast').addEventListener('change', e => { store.settings = { ...store.settings, learnCoast: e.target.checked }; renderCoastShow(); });
@@ -1679,8 +1491,7 @@ if (!store.safetyAck || !store.onboarded) {
   show('home');
   if (trip && trip.stage && Date.now() - trip.at < TRIP_MAX_AGE) {
     const wasDriving = trip.stage === 'driving';
-    if (trip.demo && trip.demoId) { const d = DEMO_ROUTES.find(x => x.id === trip.demoId); if (d) planDemoRoute(d); }
-    else if (trip.demo) planDemo();
+    if (trip.demo) planDemo();
     else if (trip.dest && store.key) planRoute(trip.dest);
     if (wasDriving) toast('Sidan laddades om. Rutten är hämtad igen – tryck Starta för att fortsätta.', false, 7000);
   }
