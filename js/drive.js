@@ -149,6 +149,20 @@ export class DriveEngine {
     };
   }
 
+  /**
+   * Byter fartmål under körning (t.ex. när vägdata för resten av rutten har
+   * kommit). Mål som redan har gett signal känns igen på läget, så att de
+   * inte signaleras igen.
+   */
+  setTargets(targets) {
+    const old = this.targets.filter(t => this.fired.has(t.id));
+    this.targets = targets;
+    this.fired = new Set();
+    for (const t of targets) {
+      if (old.some(o => Math.abs(o.s - t.s) < 40) || (this.coast && Math.abs(this.coast.target.s - t.s) < 40)) this.fired.add(t.id);
+    }
+  }
+
   setPaused(reason, events) {
     if (this.paused !== reason) {
       if (!this.paused) events.push({ type: 'pause', reason });

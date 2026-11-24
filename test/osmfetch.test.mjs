@@ -101,3 +101,67 @@ test('"för många anrop" ger nytt försök, och en trasig del stoppar inte rest
   assert.ok(part.length > 0);
   assert.match(part.stats.error, /504/);
 });
+
+test('server som hänger: nästa server frågas efter försprånget, inte efter hela timeouten', async () => {
+  const { coords, elements } = demoData();
+  const r = buildRoute(coords);
+  const ok = fakeOverpass(elements);
+  let aborted = 0;
+  const fetchImpl = (url, opts) => {
+    if (url.includes('overpass-api.de')) {
+      // Svarar aldrig, men går att avbryta
+      return new Promise((_, reject) => opts.signal.addEventListener('abort', () => { aborted++; reject(new DOMException('a', 'AbortError')); }));
+    }
+    return ok.fetchImpl(url, opts);
+  };
+  const t0 = Date.now();
+  const got = await fetchOsmAlongRoute(r, { fetchImpl, hedgeMs: 30, timeoutMs: 10000, waits: [0] });
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+  assert.equal(got.stats.failed, 0);
+  assert.ok(got.length > 0);
+  assert.ok(aborted >= 1, 'det hängande anropet avbryts');
+});
+
+test('anropen sprids över servrarna', async () => {
+  const { coords, elements } = demoData();
+  const r = buildRoute(coords);
+  const ok = fakeOverpass(elements);
+  const hosts = new Set();
+  const fetchImpl = (url, opts) => { hosts.add(new URL(url).host); return ok.fetchImpl(url, opts); };
+  await fetchOsmAlongRoute(r, { fetchImpl, cellsPerRequest: 3, waits: [0] });
+  assert.ok(hosts.size >= 2, [...hosts].join(', '));
+});
+
+test('början av rutten blir klar först, resten fortsätter', async () => {
+  const { coords, elements } = demoData();
+  const r = buildRoute(coords);
+  const ok = fakeOverpass(elements);
+  // Anrop som inte rör början av rutten blir långsamma
+  const [lat0, lon0] = r.proj.toLL(r.X[0], r.Y[0]);
+  const fetchImpl = async (url, opts) => {
+    const q = decodeURIComponent(opts.body.slice(5));
+    const near = [...q.matchAll(/\(([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)\);/g)]
+      .some(m => Math.abs(+m[1] - lat0) < 0.006 && Math.abs(+m[2] - lon0) < 0.01);
+    if (!near) await new Promise(res => setTimeout(res, 80));
+    return ok.fetchImpl(url, opts);
+  };
+  let ready = null, readyAt = 0;
+  const t0 = Date.now();
+  const full = await fetchOsmAlongRoute(r, {
+    fetchImpl, cellsPerRequest: 4, readyDist: 500, waits: [0],
+    onReady: part => { ready = part; readyAt = Date.now() - t0; },
+  });
+  assert.ok(ready, 'onReady anropades');
+  assert.equal(ready.stats.partial, true);
+  assert.ok(ready.length < full.length, `${ready.length} < ${full.length}`);
+  assert.ok(readyAt < full.stats.ms, `${readyAt} < ${full.stats.ms}`);
+  assert.equal(full.stats.readyEarly, true);
+
+  // Allt i cachen: ingen tidig del, allt kommer direkt
+  const store = new Map();
+  const cache = { get: k => store.get(k) || null, set: (k, v) => store.set(k, v) };
+  await fetchOsmAlongRoute(r, { fetchImpl: ok.fetchImpl, cache, waits: [0] });
+  let called = false;
+  await fetchOsmAlongRoute(r, { fetchImpl: ok.fetchImpl, cache, waits: [0], onReady: () => { called = true; } });
+  assert.equal(called, false);
+});
