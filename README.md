@@ -9,9 +9,10 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 1. **Rutt** hämtas med höjddata från OpenRouteService (`api.heigit.org/openrouteservice/v2/...`).
 2. **Vägdata** längs rutten hämtas från OpenStreetMap via Overpass: `maxspeed`, trafikljus, stopp- och väjningsplikt och rondeller.
    - Rutten delas i rutor på ca 500 m som sparas i telefonen i 30 dagar. De första 3 km hämtas först i egna, små anrop; därefter går Starta att trycka på och resten hämtas i bakgrunden. När den kommer läggs trafikljus och gränser längre fram till i den pågående körningen (händelsen `osm-complete` i körloggen).
+   - Har början inte kommit inom 15 s (t.ex. när alla servrar hänger) går det ändå att starta, med bara kurvor; vägdata läggs till om den kommer.
    - Anropen sprids över tre Overpass-servrar, upp till tre samtidigt. Svarar en server inte inom 5 s (2,5 s för början av rutten), eller svarar med fel, skickas samma fråga till nästa server och första svaret används.
 3. **Fartmål** byggs: trafikljus/stopplikt = 0, väjningsplikt ≈ 20 km/h, rondell ≈ 25 km/h, kurva = √(a_lat · R), ny lägre gräns = gränsen.
-4. **Fysikmodell** för rullning med släppt gas: `a(v, s) = A + C·v² + g·θ(s)`. A och C kommer från ett rullprov.
+4. **Fysikmodell** för rullning med släppt gas: `a(v, s) = A + C·v² + g·θ(s)`, där θ är lutningen ur ruttens höjddata. A och C kommer från ett rullprov. Utan rullprov används typvärden från en verklig bil (A = 0,15 m/s², C = 0,00025 1/m: ca 0,2 m/s² vid 70 km/h och 0,3 m/s² vid 110 km/h på plan väg).
 5. **Släpp-punkt**: appen räknar baklänges från varje fartmål. Det mål som kräver tidigast släpp styr, och signalen ges 1–2 s (reaktionsmarginal) före släpp-punkten.
 
 ## Kom igång
@@ -40,7 +41,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 Varje rullning efter en släpp-signal blir ett litet rullprov. Appen hittar rullningen i GPS-farten, klipper bort början (foten lämnar gasen), slutet och allt efter gas (farten ökar) eller broms (inbromsning 0,8 m/s² mer än modellen två sekunder i rad, eller en ihållande stöt i accelerometern). Inbromsningen korrigeras för backen med ruttens höjddata.
 
-Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Rullningar som avviker mycket från modellen sorteras bort: lättare än väntat (troligen friläge) eller tyngre (broms). Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Av/på och återställning under Inställningar → Kalibrering.
+Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Rullningar som bromsar mycket mer än modellen sorteras bort (broms). Rullningar som är lättare än väntat godkänns, eftersom bilar som frikopplar när gasen släpps rullar så; bara en rullning som inte tappar någon fart på plan väg (lutningen borträknad) sorteras bort, eftersom den betyder gas eller fel höjddata. Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Av/på och återställning under Inställningar → Kalibrering.
 
 ## Körlogg (JSON)
 

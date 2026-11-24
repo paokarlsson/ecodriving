@@ -361,7 +361,6 @@ function model() {
   const fit = coastStats().fit(base);
   return fit ? { ...base, A: fit.A, C: fit.C, coastSegments: fit.segments } : base;
 }
-const isCalibrated = () => !!store.calibration;
 /** Inställningar som påverkar fartmålen; med släp gäller högst 80 km/h. */
 function planSettings() {
   const s = store.settings;
@@ -527,7 +526,10 @@ function renderBackgroundStatus() {
   el.hidden = !on;
   if (on) {
     const p = bgProgress && bgProgress.total ? ` ${bgProgress.n}/${bgProgress.total}` : '';
-    el.innerHTML = `<span class="spinner"></span>Vägdata för resten av rutten hämtas${esc(p)}. Du kan starta nu; trafikljus och gränser längre fram läggs till under körningen.`;
+    const slow = plan.osmStats?.readyTimeout;
+    el.innerHTML = `<span class="spinner"></span>` + (slow
+      ? `Vägdata från OpenStreetMap dröjer${esc(p)}. Du kan starta nu med bara kurvor; trafikljus och gränser läggs till när de kommer.`
+      : `Vägdata för resten av rutten hämtas${esc(p)}. Du kan starta nu; trafikljus och gränser längre fram läggs till under körningen.`);
   }
 }
 
@@ -792,7 +794,7 @@ function recordApi() {
 function handleCoastSegment(seg, t) {
   if (seg.dur < 3) return; // inte värt att logga
   drive.coastFound++;
-  let verdict = acceptSegment(seg, model(), { calibrated: isCalibrated() });
+  let verdict = acceptSegment(seg, model());
   // Bara rullningar som börjar vid en släpp-signal räknas: då vet appen att
   // gasen släpptes helt. Att bara lätta lite på gasen ser ut som en "lätt"
   // rullning och skulle annars få modellen att tro att bilen rullar längre.

@@ -19,8 +19,7 @@ export const COAST = {
   skipStart: 1.5,    // s i början (foten lämnar gasen)
   skipEnd: 1.0,      // s i slutet (innan gas eller broms)
   heavierMax: 0.3,   // m/s²: bromsade mer än modellen → broms eller fel
-  lighterMax: 0.18,  // m/s²: rullade lättare än modellen → troligen friläge (med kalibrerad modell)
-  lighterMaxTypical: 0.35, // samma med bara typvärden, som kan ligga långt från bilen
+  minFlatDecel: 0.02, // m/s²: lägre på plan väg (lutningen borträknad) är inte rullning (gas eller fel höjddata)
   segWeight: 3,      // en rullning väger högst som 3 punkter
   priorPoints: 7,    // rullprovet som startvärde: 7 punkter mellan 30 och 90 km/h …
   priorWeight: 3,    // … med vikt 3 var (≈ 7 rullningar)
@@ -124,15 +123,18 @@ export function segmentResidual(seg, model) {
 }
 
 /**
- * Godkänn en rullning mot nuvarande modell (sorterar bort friläge, broms och
- * fel). calibrated = modellen bygger på ett rullprov; annars är gränsen mot
- * "lättare än väntat" generösare, eftersom typvärdena kan ligga långt ifrån.
+ * Godkänn en rullning mot nuvarande modell. Tyngre än väntat sorteras bort
+ * (broms). Lättare än väntat godkänns: bilar som frikopplar när gasen släpps
+ * rullar så, och det är just det modellen ska lära sig. Bara en rullning som
+ * inte bromsar alls på plan väg (efter att lutningen räknats bort) sorteras
+ * bort, eftersom den betyder gas eller fel höjddata.
  */
-export function acceptSegment(seg, model, { calibrated = true } = {}) {
+export function acceptSegment(seg, model) {
   if (!seg.ok) return { ok: false, reason: seg.reason };
   const resid = segmentResidual(seg, model);
   if (resid > COAST.heavierMax) return { ok: false, reason: 'bromsade mer än väntat (broms?)', resid };
-  if (resid < -(calibrated ? COAST.lighterMax : COAST.lighterMaxTypical)) return { ok: false, reason: 'rullade lättare än väntat (friläge?)', resid };
+  const flat = seg.points.reduce((s, p) => s + p.a, 0) / seg.points.length;
+  if (flat < COAST.minFlatDecel) return { ok: false, reason: 'tappade ingen fart på plan väg (gas eller fel höjddata?)', resid };
   return { ok: true, resid };
 }
 

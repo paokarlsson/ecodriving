@@ -224,11 +224,13 @@ function overpassRound(query, { fetchImpl, signal, timeoutMs, hedgeMs = 5000, fi
  * onReady(elements) anropas en gång när rutans första readyDist meter är klara
  * men resten fortfarande hämtas, så att körningen kan börja. Elementen har
  * .stats med partial: true och readyS (m). Är allt klart på en gång anropas
- * den inte.
+ * den inte. Har början inte kommit inom readyTimeoutMs (t.ex. när alla
+ * servrar hänger) anropas onReady ändå med det som finns, så att körningen
+ * kan börja med bara kurvor; .stats.readyTimeout är då true.
  */
 export async function fetchOsmAlongRoute(route, {
   fetchImpl = fetch, signal, cache = null, onProgress = () => {}, onReady = null,
-  readyDist = 3000, cellsPerRequest = 12, concurrency = 3, timeoutMs = 30000, hedgeMs = 5000, waits,
+  readyDist = 3000, readyTimeoutMs = 15000, cellsPerRequest = 12, concurrency = 3, timeoutMs = 30000, hedgeMs = 5000, waits,
 } = {}) {
   const t0 = Date.now();
   const cells = routeCellsAt(route);
@@ -253,13 +255,16 @@ export async function fetchOsmAlongRoute(route, {
     cells: cells.length, cached: cells.length - missingNear.length - missingFar.length,
     batches: batches.length, failed, error: lastError, ms: Date.now() - t0, ...extra,
   });
-  const maybeReady = () => {
-    if (readySent || !onReady || nearDone < nearBatches || done >= batches.length) return;
+  const maybeReady = (timedOut = false) => {
+    if (readySent || !onReady || done >= batches.length) return;
+    if (!timedOut && nearDone < nearBatches) return;
     readySent = true;
+    clearTimeout(readyTimer);
     const part = [...elements.values()];
-    part.stats = stats({ partial: true, readyS: readyDist });
+    part.stats = stats({ partial: true, readyS: readyDist, readyTimeout: timedOut });
     onReady(part);
   };
+  const readyTimer = onReady ? setTimeout(() => maybeReady(true), readyTimeoutMs) : null;
   maybeReady();   // början kanske redan finns i cachen
   const worker = async () => {
     while (next < batches.length) {
@@ -291,7 +296,11 @@ export async function fetchOsmAlongRoute(route, {
       maybeReady();
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
+  try {
+    await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
+  } finally {
+    clearTimeout(readyTimer);
+  }
   const out = [...elements.values()];
   out.stats = stats({ readyEarly: readySent });
   if (batches.length && failed === batches.length && out.stats.cached === 0) {
