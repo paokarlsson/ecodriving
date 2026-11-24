@@ -8,6 +8,8 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 1. **Rutt** hämtas med höjddata från OpenRouteService (`api.heigit.org/openrouteservice/v2/...`).
 2. **Vägdata** längs rutten hämtas från OpenStreetMap via Overpass: `maxspeed`, trafikljus, stopp- och väjningsplikt och rondeller.
+   - Rutten delas i rutor på ca 500 m som sparas i telefonen i 30 dagar. De första 3 km hämtas först i egna, små anrop; därefter går Starta att trycka på och resten hämtas i bakgrunden. När den kommer läggs trafikljus och gränser längre fram till i den pågående körningen (händelsen `osm-complete` i körloggen).
+   - Anropen sprids över tre Overpass-servrar, upp till tre samtidigt. Svarar en server inte inom 5 s (2,5 s för början av rutten), eller svarar med fel, skickas samma fråga till nästa server och första svaret används.
 3. **Fartmål** byggs: trafikljus/stopplikt = 0, väjningsplikt ≈ 20 km/h, rondell ≈ 25 km/h, kurva = √(a_lat · R), ny lägre gräns = gränsen.
 4. **Fysikmodell** för rullning med släppt gas: `a(v, s) = A + C·v² + g·θ(s)`. A och C kommer från ett rullprov.
 5. **Släpp-punkt**: appen räknar baklänges från varje fartmål. Det mål som kräver tidigast släpp styr, och signalen ges 1–2 s (reaktionsmarginal) före släpp-punkten.

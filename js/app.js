@@ -445,7 +445,13 @@ function renderFavorites() {
 // ---------- Rutt ----------
 let plan = null; // {dest, route, targets, limits, duration, demo, warnings}
 
-async function prepare(coords, elements = null, onStep = () => {}) {
+/**
+ * Bygger rutt och fartmål. Utan färdiga element hämtas vägdata längs rutten.
+ * Med onComplete returneras planen så snart början av rutten har vägdata
+ * (plan.partial = true); onComplete(plan) anropas sedan med hela rutten.
+ * Utan onComplete väntar funktionen tills allt är hämtat.
+ */
+async function prepare(coords, elements = null, onStep = () => {}, onComplete = null) {
   let route = buildRoute(coords);
   const warnings = [];
   if (!route.hasEle) {
@@ -460,35 +466,83 @@ async function prepare(coords, elements = null, onStep = () => {}) {
       route = buildRoute(withEle);
     } catch { warnings.push('Höjddata saknas – backar räknas inte in.'); }
   }
-  let osmStats = null;
-  if (!elements) {
-    const t0 = performance.now();
-    try {
-      elements = await fetchOsmAlongRoute(route, {
-        cache: osmCache,
-        onProgress: (done, total) => {
-          if (total) onStep(`Hämtar trafikljus och hastighetsgränser… ${done}/${total}`);
-        },
-      });
-      osmStats = elements.stats;
-      if (osmStats?.failed) {
-        warnings.push(`Vägdata saknas för ${osmStats.failed} av ${osmStats.batches} delar av rutten (${osmStats.error}). Där saknas gränser och trafikljus.`);
+  if (elements) return planFromElements(route, elements, warnings, null);
+
+  const t0 = performance.now();
+  return new Promise(resolve => {
+    let early = false;
+    const done = p => {
+      console.info(`Vägdata: ${Math.round(performance.now() - t0)} ms${early ? ' (körbar tidigare)' : ''}`);
+      if (early) onComplete(p); else resolve(p);
+    };
+    fetchOsmAlongRoute(route, {
+      cache: osmCache,
+      onProgress: (n, total) => {
+        if (total && !early) onStep(`Hämtar trafikljus och hastighetsgränser… ${n}/${total}`);
+        if (early) onBackgroundProgress(route, n, total);
+      },
+      onReady: onComplete ? part => {
+        early = true;
+        console.info(`Vägdata för början: ${Math.round(performance.now() - t0)} ms`);
+        resolve(planFromElements(route, part, warnings, part.stats));
+      } : null,
+    }).then(els => {
+      const w = [...warnings];
+      const st = els.stats;
+      if (st?.failed) {
+        w.push(`Vägdata saknas för ${st.failed} av ${st.batches} delar av rutten (${st.error}). Där saknas gränser och trafikljus.`);
       }
-    } catch (e) {
-      elements = [];
-      osmStats = e.stats || { error: e.message };
-      warnings.push(`Kunde inte hämta trafikljus och hastighetsgränser (${e.message}). Bara kurvor används.`);
-    }
-    console.info(`Vägdata: ${Math.round(performance.now() - t0)} ms`);
-  }
+      done(planFromElements(route, els, w, st));
+    }, e => {
+      done(planFromElements(route, [], [...warnings, `Kunde inte hämta trafikljus och hastighetsgränser (${e.message}). Bara kurvor används.`], e.stats || { error: e.message }));
+    });
+  });
+}
+
+function planFromElements(route, elements, warnings, osmStats) {
+  const partial = !!osmStats?.partial;
   const rawLimits = assignLimits(route, elements);
   const coverage = rawLimits.coverage ?? 0;
-  if (elements.length && coverage < 0.6) {
-    warnings.push(coverage === 0
+  const w = [...warnings];
+  // Med bara början hämtad är täckningen missvisande låg: vänta på resten.
+  if (!partial && elements.length && coverage < 0.6) {
+    w.push(coverage === 0
       ? 'Ingen hastighetsgräns hittades i OpenStreetMap längs rutten. Fartmål för gränser saknas, övriga fartmål gäller.'
       : `Hastighetsgräns finns i OpenStreetMap för bara ${Math.round(coverage * 100)} % av rutten; resten räknas med närmaste kända gräns.`);
   }
-  return computeTargets({ route, elements, rawLimits, coverage, warnings, osmStats });
+  return computeTargets({ route, elements, rawLimits, coverage, warnings: w, osmStats, partial });
+}
+
+/** Status för vägdata som hämtas i bakgrunden, i ruttöversikten och körvyn. */
+let bgProgress = null;
+function onBackgroundProgress(route, n, total) {
+  if (!plan || plan.route !== route || !plan.partial) return;
+  bgProgress = { n, total };
+  renderBackgroundStatus();
+}
+function renderBackgroundStatus() {
+  const el = $('ov-bg');
+  if (!el) return;
+  const on = !!(plan && plan.partial && !plan.demo);
+  el.hidden = !on;
+  if (on) {
+    const p = bgProgress && bgProgress.total ? ` ${bgProgress.n}/${bgProgress.total}` : '';
+    el.innerHTML = `<span class="spinner"></span>Vägdata för resten av rutten hämtas${esc(p)}. Du kan starta nu; trafikljus och gränser längre fram läggs till under körningen.`;
+  }
+}
+
+/** Hela rutans vägdata har kommit: byt in den i planen och i en pågående körning. */
+function applyFullPlan(route, p) {
+  if (!plan || plan.route !== route) return;   // ny rutt sedan dess
+  plan = { ...plan, ...p };
+  bgProgress = null;
+  if (drive.engine && drive.engine.route === route) {
+    drive.engine.setTargets(plan.targets);
+    drive.tracker?.setCurves(plan.curves, planSettings().aLat);
+    drive.log?.event(Date.now() / 1000, 'osm-complete', { route: routeMeta(plan) });
+  }
+  if (!$('overview').hidden) renderOverview();
+  else renderBackgroundStatus();
 }
 
 // ---------- Resmål som överlever omladdning ----------
@@ -535,7 +589,8 @@ async function planRoute(dest) {
     const here = await startPosition();
     step('Hämtar rutt…');
     const r = await getRoute(store.key, here, dest);
-    const p = await prepare(r.coords, null, step);
+    bgProgress = null;
+    const p = await prepare(r.coords, null, step, full => applyFullPlan(full.route, full));
     plan = { dest, ...p, duration: r.duration, demo: false,
       apiRoute: { from: { lat: here.lat, lon: here.lon }, to: { lat: dest.lat, lon: dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
     renderOverview();
@@ -564,7 +619,7 @@ function renderOverview() {
     `<span><b>${fmtDist(route.length)}</b></span>` +
     (duration ? `<span><b>${Math.round(duration / 60)}</b> min</span>` : '') +
     `<span><b>${n}</b> fartmål</span>` +
-    (plan.coverage != null && !plan.demo ? `<span><b>${Math.round(plan.coverage * 100)}</b> % med gräns</span>` : '');
+    (plan.coverage != null && !plan.demo && !plan.partial ? `<span><b>${Math.round(plan.coverage * 100)}</b> % med gräns</span>` : '');
   const c = countKinds(targets);
   const order = ['traffic_signals', 'roundabout', 'curve', 'limit', 'give_way', 'stop'];
   $('ov-counts').innerHTML = order.filter(k => c[k]).map(k =>
@@ -578,7 +633,8 @@ function renderOverview() {
   $('ov-trailer').checked = trailerOn();
   $('ov-trailer-text').textContent = `Släpvagn (max ${TRAILER_MAX_KMH} km/h)`;
   $('ov-fav').hidden = plan.demo || store.favorites.some(f => f.name === dest.name);
-  requestAnimationFrame(() => drawOverview($('ov-map'), route, targets));
+  renderBackgroundStatus();
+  requestAnimationFrame(() => drawOverview($('ov-map'), route, targets, plan.curves));
 }
 function legendExtra(k) {
   if (k === 'curve' && plan.curves && plan.curves.length) {
@@ -982,7 +1038,8 @@ async function reroute(obs) {
   setRing('paused', 'Ny rutt', 'beräknas…', 0);
   try {
     const r = await getRoute(store.key, obs, plan.dest);
-    const p = await prepare(r.coords);
+    bgProgress = null;
+    const p = await prepare(r.coords, null, () => {}, full => applyFullPlan(full.route, full));
     const stats = drive.engine.stats;
     plan = { ...plan, ...p, duration: r.duration,
       apiRoute: { from: { lat: obs.lat, lon: obs.lon }, to: { lat: plan.dest.lat, lon: plan.dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
@@ -1116,7 +1173,7 @@ $('d-stop').addEventListener('click', () => {
   else back();
 });
 window.addEventListener('resize', () => {
-  if (!$('overview').hidden && plan) drawOverview($('ov-map'), plan.route, plan.targets);
+  if (!$('overview').hidden && plan) drawOverview($('ov-map'), plan.route, plan.targets, plan.curves);
 });
 
 // ---------- Sammanfattning ----------

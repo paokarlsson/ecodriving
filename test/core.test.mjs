@@ -191,6 +191,38 @@ test('körning på demorutten: signaler ges före varje fartmål och följs', ()
   assert.ok(releaseMessage(releases[0].e).startsWith('Släpp'));
 });
 
+test('fartmål som kommer under körningen används, och redan signalerade mål upprepas inte', () => {
+  const { coords, elements } = demoData();
+  const r = buildRoute(coords);
+  const L = assignLimits(r, elements);
+  const full = buildTargets(r, elements, L, { aLat: 2.5, giveWayKmh: 20, roundaboutKmh: 25 });
+  // Bara de första 400 m med vägdata, resten kurvor
+  const near = elements.filter(el => {
+    const p = el.type === 'node' ? el : el.geometry[0];
+    const m = matchToRoute(r, p.lat, p.lon);
+    return m && m.s < 400;
+  });
+  const partial = buildTargets(r, near, assignLimits(r, near), { aLat: 2.5, giveWayKmh: 20, roundaboutKmh: 25 });
+  assert.ok(partial.length < full.length, `${partial.length} < ${full.length}`);
+  const eng = new DriveEngine(r, partial, model, { marginS: 1.5 });
+  const car = new SimCar(r, L, model, { startV: 0 });
+  const fired = [];
+  let swapped = false, arrived = null;
+  for (let i = 0; i < 3000 && !arrived; i++) {
+    const obs = car.step(1, full);
+    if (!swapped && eng.s > 300) { eng.setTargets(full); swapped = true; }
+    for (const e of eng.update(obs).events) {
+      if (e.type === 'release') { fired.push(e.target.s); car.onRelease(e.target); }
+      if (e.type === 'arrived') arrived = e.stats;
+    }
+  }
+  assert.ok(swapped && arrived);
+  for (let i = 1; i < fired.length; i++) assert.ok(fired[i] - fired[i - 1] >= 40, `dubbelsignal vid ${fired[i]}`);
+  // Mål längre fram som bara finns i full data ger signal
+  const late = full.filter(t => t.s > 800 && t.kind !== 'end' && !partial.some(p => Math.abs(p.s - t.s) < 40));
+  if (late.length) assert.ok(late.some(t => fired.some(s => Math.abs(s - t.s) < 40)), 'nya mål signaleras');
+});
+
 test('körmotor pausar vid dålig GPS och utanför rutten', () => {
   const { coords } = demoData();
   const r = buildRoute(coords);

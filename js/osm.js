@@ -72,6 +72,11 @@ export function cellBounds(key) {
 
 /** Cellerna som rutten (med marginal pad meter) passerar, i ruttens ordning. */
 export function routeCells(route, pad = 40) {
+  return routeCellsAt(route, pad).map(c => c.key);
+}
+
+/** Som routeCells, men med sträckan s (m) där rutten först når varje cell. */
+export function routeCellsAt(route, pad = 40) {
   const seen = new Set();
   const out = [];
   const dLat = pad / 111320;
@@ -82,7 +87,7 @@ export function routeCells(route, pad = 40) {
     const j0 = Math.floor((lon - dLon) / CELL_LON), j1 = Math.floor((lon + dLon) / CELL_LON);
     for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
       const key = cellKey(i, j);
-      if (!seen.has(key)) { seen.add(key); out.push(key); }
+      if (!seen.has(key)) { seen.add(key); out.push({ key, s: route.S[k] }); }
     }
   }
   return out;
@@ -134,15 +139,16 @@ function cellsOfElement(el, wanted) {
 
 /**
  * Ett anrop till Overpass. Servrarna är gratis och delade: "för många anrop"
- * (429), överbelastning (502–504) och timeout är vanliga. Varje server provas
- * i tur och ordning, i upp till tre omgångar med väntan emellan.
+ * (429), överbelastning (502–504) och timeout är vanliga. Varje omgång frågar
+ * servrarna parallellt med försprång (se overpassRound); upp till tre omgångar
+ * med väntan emellan.
  */
-async function overpassFetch(query, { fetchImpl, signal, timeoutMs, waits = [0, 3000, 8000] }) {
+async function overpassFetch(query, { fetchImpl, signal, timeoutMs, hedgeMs, first = 0, waits = [0, 3000, 8000] }) {
   let lastErr;
   for (const wait of waits) {
     if (wait) await sleep(wait, signal);
     try {
-      return await overpassRound(query, { fetchImpl, signal, timeoutMs });
+      return await overpassRound(query, { fetchImpl, signal, timeoutMs, hedgeMs, first });
     } catch (e) {
       if (signal?.aborted) throw e;
       lastErr = e;
@@ -151,37 +157,62 @@ async function overpassFetch(query, { fetchImpl, signal, timeoutMs, waits = [0, 
   throw lastErr;
 }
 
-async function overpassRound(query, { fetchImpl, signal, timeoutMs }) {
-  let lastErr;
-  for (const ep of OVERPASS_ENDPOINTS) {
-    const ctrl = new AbortController();
-    const onAbort = () => ctrl.abort();
-    signal?.addEventListener('abort', onAbort);
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const res = await fetchImpl(ep, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(query),
-        signal: ctrl.signal,
-      });
-      if (!res.ok) throw new Error(`Overpass svarade ${res.status}`);
-      const json = await res.json();
-      // Overpass kan svara 200 med tom lista och en felnotering (t.ex. timeout).
-      // Ett sådant svar får inte sparas som "inga vägar här".
-      if (json.remark && /error|timed out|rate|out of memory/i.test(json.remark)) {
-        throw new Error('Overpass: ' + json.remark.slice(0, 80));
-      }
-      return json;
-    } catch (e) {
-      if (signal?.aborted) throw e;
-      lastErr = e.name === 'AbortError' ? new Error('Overpass svarade inte i tid') : e;
-    } finally {
-      clearTimeout(timer);
+/**
+ * En omgång: frågar först servern med index first. Har den inte svarat inom
+ * hedgeMs, eller svarar den med fel, skickas samma fråga också till nästa
+ * server. Första giltiga svaret vinner och de andra anropen avbryts. Så kostar
+ * en server som hänger några sekunder i stället för hela timeouten.
+ */
+function overpassRound(query, { fetchImpl, signal, timeoutMs, hedgeMs = 5000, first = 0 }) {
+  const eps = OVERPASS_ENDPOINTS.map((_, k) => OVERPASS_ENDPOINTS[(first + k) % OVERPASS_ENDPOINTS.length]);
+  return new Promise((resolve, reject) => {
+    const ctrls = [];
+    let started = 0, failed = 0, settled = false, lastErr = null, hedgeTimer = null;
+    const finish = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hedgeTimer);
       signal?.removeEventListener('abort', onAbort);
-    }
-  }
-  throw lastErr || new Error('Overpass gick inte att nå');
+      for (const c of ctrls) c.abort();
+      fn(v);
+    };
+    const onAbort = () => finish(reject, new DOMException('Avbruten', 'AbortError'));
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener('abort', onAbort);
+
+    const startNext = () => {
+      clearTimeout(hedgeTimer);
+      if (settled || started >= eps.length) return;
+      const ep = eps[started++];
+      if (started < eps.length) hedgeTimer = setTimeout(startNext, hedgeMs);
+      const ctrl = new AbortController();
+      ctrls.push(ctrl);
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      (async () => {
+        const res = await fetchImpl(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(query),
+          signal: ctrl.signal,
+        });
+        if (!res.ok) throw new Error(`Overpass svarade ${res.status}`);
+        const json = await res.json();
+        // Overpass kan svara 200 med tom lista och en felnotering (t.ex. timeout).
+        // Ett sådant svar får inte sparas som "inga vägar här".
+        if (json.remark && /error|timed out|rate|out of memory/i.test(json.remark)) {
+          throw new Error('Overpass: ' + json.remark.slice(0, 80));
+        }
+        return json;
+      })().then(json => finish(resolve, json), e => {
+        if (settled) return;
+        lastErr = e.name === 'AbortError' ? new Error('Overpass svarade inte i tid') : e;
+        failed++;
+        if (failed >= eps.length) finish(reject, lastErr);
+        else if (failed >= started) startNext();   // inget anrop pågår: ta nästa server direkt
+      }).finally(() => clearTimeout(timer));
+    };
+    startNext();
+  });
 }
 
 /**
@@ -190,57 +221,80 @@ async function overpassRound(query, { fetchImpl, signal, timeoutMs }) {
  * failed, error, ms}). Fel kastas bara om ingenting alls gick att hämta.
  * cache = {get(key) → elements|null, set(key, elements)} (valfri, t.ex. localStorage)
  * onProgress(done, total) anropas efter varje hämtad del.
+ * onReady(elements) anropas en gång när rutans första readyDist meter är klara
+ * men resten fortfarande hämtas, så att körningen kan börja. Elementen har
+ * .stats med partial: true och readyS (m). Är allt klart på en gång anropas
+ * den inte.
  */
 export async function fetchOsmAlongRoute(route, {
-  fetchImpl = fetch, signal, cache = null, onProgress = () => {},
-  cellsPerRequest = 12, concurrency = 2, timeoutMs = 30000, waits,
+  fetchImpl = fetch, signal, cache = null, onProgress = () => {}, onReady = null,
+  readyDist = 3000, cellsPerRequest = 12, concurrency = 3, timeoutMs = 30000, hedgeMs = 5000, waits,
 } = {}) {
   const t0 = Date.now();
-  const cells = routeCells(route);
+  const cells = routeCellsAt(route);
   const elements = new Map();
-  const missing = [];
-  for (const key of cells) {
+  const missingNear = [], missingFar = [];
+  for (const { key, s } of cells) {
     const hit = cache && cache.get(key);
     if (hit) for (const el of hit) elements.set(el.type + el.id, el);
-    else missing.push(key);
+    else (s < readyDist ? missingNear : missingFar).push(key);
   }
+  // Början av rutten i egna, små anrop som går först.
   const batches = [];
-  for (let i = 0; i < missing.length; i += cellsPerRequest) batches.push(missing.slice(i, i + cellsPerRequest));
-  let done = 0;
+  const nearSize = Math.max(1, Math.min(cellsPerRequest, Math.ceil(missingNear.length / 2)));
+  for (let i = 0; i < missingNear.length; i += nearSize) batches.push(missingNear.slice(i, i + nearSize));
+  const nearBatches = batches.length;
+  for (let i = 0; i < missingFar.length; i += cellsPerRequest) batches.push(missingFar.slice(i, i + cellsPerRequest));
+  let done = 0, nearDone = 0, readySent = false;
   onProgress(done, batches.length);
 
   let next = 0, failed = 0, lastError = null;
+  const stats = (extra = {}) => ({
+    cells: cells.length, cached: cells.length - missingNear.length - missingFar.length,
+    batches: batches.length, failed, error: lastError, ms: Date.now() - t0, ...extra,
+  });
+  const maybeReady = () => {
+    if (readySent || !onReady || nearDone < nearBatches || done >= batches.length) return;
+    readySent = true;
+    const part = [...elements.values()];
+    part.stats = stats({ partial: true, readyS: readyDist });
+    onReady(part);
+  };
+  maybeReady();   // början kanske redan finns i cachen
   const worker = async () => {
     while (next < batches.length) {
-      const batch = batches[next++];
-      let json;
+      const idx = next++;
+      const batch = batches[idx];
+      let json = null;
       try {
-        json = await overpassFetch(overpassQuery(batch), { fetchImpl, signal, timeoutMs, waits });
+        // Sprid anropen över servrarna så att de inte köar hos samma.
+        // Början av rutten håller upp starten: fråga nästa server tidigare.
+        const hedge = idx < nearBatches ? hedgeMs / 2 : hedgeMs;
+        json = await overpassFetch(overpassQuery(batch), { fetchImpl, signal, timeoutMs, hedgeMs: hedge, waits, first: idx });
       } catch (e) {
         if (signal?.aborted) throw e;
         failed++;
         lastError = e.message;
-        onProgress(++done, batches.length);
-        continue;
       }
-      const wanted = new Set(batch);
-      const perCell = new Map(batch.map(k => [k, []]));
-      for (const raw of json.elements || []) {
-        const el = compactElement(raw);
-        elements.set(el.type + el.id, el);
-        for (const k of cellsOfElement(el, wanted)) perCell.get(k).push(el);
+      if (json) {
+        const wanted = new Set(batch);
+        const perCell = new Map(batch.map(k => [k, []]));
+        for (const raw of json.elements || []) {
+          const el = compactElement(raw);
+          elements.set(el.type + el.id, el);
+          for (const k of cellsOfElement(el, wanted)) perCell.get(k).push(el);
+        }
+        if (cache) for (const [k, els] of perCell) cache.set(k, els);
       }
-      if (cache) for (const [k, els] of perCell) cache.set(k, els);
+      if (idx < nearBatches) nearDone++;
       onProgress(++done, batches.length);
+      maybeReady();
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
   const out = [...elements.values()];
-  out.stats = {
-    cells: cells.length, cached: cells.length - missing.length,
-    batches: batches.length, failed, error: lastError, ms: Date.now() - t0,
-  };
-  if (batches.length && failed === batches.length && cells.length === missing.length) {
+  out.stats = stats({ readyEarly: readySent });
+  if (batches.length && failed === batches.length && out.stats.cached === 0) {
     const e = new Error(lastError || 'Overpass gick inte att nå');
     e.stats = out.stats;
     throw e;
