@@ -1,6 +1,9 @@
 // Enkel vektorkarta på canvas: ruttöversikt och vriden körkarta.
 // Ingen kartbakgrund (inga tiles) – bara rutten och fartmålen.
 
+/** Kurvor snävare än så här får radien utskriven på kartan (m). */
+export const TIGHT_RADIUS = 100;
+
 export const KIND_COLOR = {
   traffic_signals: '#e5484d', stop: '#e5484d', give_way: '#f5a524',
   roundabout: '#8e4ec6', curve: '#0090ff', limit: '#30a46c', end: '#888',
@@ -25,7 +28,7 @@ function setup(canvas) {
 }
 
 /** Hela rutten inpassad i canvasen, norr upp. */
-export function drawOverview(canvas, route, targets) {
+export function drawOverview(canvas, route, targets, curves = null) {
   const { g, w, h } = setup(canvas);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (let i = 0; i < route.n; i++) {
@@ -38,6 +41,15 @@ export function drawOverview(canvas, route, targets) {
   const P = (x, y) => [ox + (x - minX) * sc, h - (oy + (y - minY) * sc)];
   drawRoute(g, route, P, 0, route.n - 1, css('--route', '#4a5568'), 5);
   drawTargets(g, route, targets, P);
+  // Radien för snäva kurvor. Etiketter som skulle hamna på varandra hoppas
+  // över, snävast kurva först så att den viktigaste syns.
+  const placed = [];
+  const tight = (curves || []).filter(c => c.radius < TIGHT_RADIUS).sort((a, b) => a.radius - b.radius);
+  for (const c of tight) {
+    const [x, y] = P(...xyAtIndex(route, c.s));
+    const box = radiusLabel(g, x, y, c.radius, placed, w, h);
+    if (box) placed.push(box);
+  }
   const [sx, sy] = P(route.X[0], route.Y[0]);
   dot(g, sx, sy, 7, css('--accent', '#2f855a'), '#fff');
   const [ex, ey] = P(route.X[route.n - 1], route.Y[route.n - 1]);
@@ -69,6 +81,7 @@ export function drawDrive(canvas, route, targets, s, headingDeg, { limits = null
     if (!ahead(c.s)) continue;
     const [x, y] = P(...xyAtIndex(route, c.s));
     curveSign(g, x + 16, y - 16, Math.round(c.v * 3.6));
+    if (c.radius < TIGHT_RADIUS) radiusTag(g, x + 16, y - 16 + 19, c.radius);
   }
   // Hastighetsgräns där den ändras framför bilen
   if (limits) {
@@ -158,4 +171,45 @@ function curveSign(g, x, y, kmh) {
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(String(kmh), x, y + 0.5);
+}
+
+const fmtRadius = r => `R ${Math.max(1, Math.round(r))} m`;
+
+/**
+ * Radie som etikett bredvid en punkt i översikten. Provar fyra lägen runt
+ * punkten och tar det första som inte krockar med tidigare etiketter eller
+ * kanten. Returnerar etikettens ruta, eller null om den inte fick plats.
+ */
+function radiusLabel(g, x, y, r, placed, w, h) {
+  g.font = '700 11px system-ui, sans-serif';
+  const text = fmtRadius(r);
+  const bw = g.measureText(text).width + 10, bh = 17;
+  const spots = [[10, -bh - 4], [10, 4], [-bw - 10, -bh - 4], [-bw - 10, 4]];
+  for (const [dx, dy] of spots) {
+    const b = { x: x + dx, y: y + dy, w: bw, h: bh };
+    if (b.x < 2 || b.y < 2 || b.x + b.w > w - 2 || b.y + b.h > h - 2) continue;
+    if (placed.some(o => b.x < o.x + o.w + 2 && o.x < b.x + b.w + 2 && b.y < o.y + o.h + 2 && o.y < b.y + b.h + 2)) continue;
+    pill(g, b, text);
+    return b;
+  }
+  return null;
+}
+
+/** Radie under kurvskylten i körkartan. */
+function radiusTag(g, x, y, r) {
+  g.font = '700 11px system-ui, sans-serif';
+  const text = fmtRadius(r);
+  const bw = g.measureText(text).width + 10, bh = 16;
+  pill(g, { x: x - bw / 2, y: y - bh / 2, w: bw, h: bh }, text);
+}
+
+function pill(g, b, text) {
+  g.fillStyle = 'rgba(17,17,17,0.82)';
+  g.beginPath();
+  g.roundRect ? g.roundRect(b.x, b.y, b.w, b.h, b.h / 2) : g.rect(b.x, b.y, b.w, b.h);
+  g.fill();
+  g.fillStyle = '#fff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(text, b.x + b.w / 2, b.y + b.h / 2 + 0.5);
 }
