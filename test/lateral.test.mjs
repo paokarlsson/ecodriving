@@ -180,3 +180,11 @@ test('stötar mot telefonen ignoreras', () => {
   m.addMotion({ t: 1.0, rot: { alpha: 400, beta: 300, gamma: 0 }, gx: 0, gy: 0, gz: 9.81 });
   assert.ok(m.current().g < 0.05, `${m.current().g}`);
 });
+
+test('curveRadiusText: kartans radie och uppmätt radie', async () => {
+  const { curveRadiusText } = await import('../js/lateral.js');
+  assert.equal(curveRadiusText({ radius: 84, radiusMeas: 91.2, valid: true }), 'R 85 m (kört 90 m)');
+  assert.equal(curveRadiusText({ radius: 141, radiusMeas: 150, valid: false }), 'R 140 m');
+  assert.equal(curveRadiusText({ radius: 60, radiusMeas: null, valid: true }), 'R 60 m');
+  assert.equal(curveRadiusText({ radius: 300, radiusMeas: 5000, valid: true }), 'R 300 m');
+});

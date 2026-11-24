@@ -327,6 +327,19 @@ export class CurveTracker {
   }
 }
 
+/**
+ * Kurvradien som text för sammanfattningen: kartans radie och, om kurvan är
+ * mätt, radien bilen faktiskt körde (fart / vridhastighet vid toppen).
+ * Avrundas till 5 m; över 1 km visas inte den uppmätta (då var det nästan rakt).
+ */
+export function curveRadiusText(rec) {
+  const r5 = m => Math.round(m / 5) * 5;
+  let txt = Number.isFinite(rec.radius) ? `R ${r5(rec.radius)} m` : '';
+  const meas = rec.radiusMeas;
+  if (txt && rec.valid && Number.isFinite(meas) && meas > 0 && meas < 1000) txt += ` (kört ${r5(meas)} m)`;
+  return txt;
+}
+
 /** Rak väg kring s: kursändringen ±30 m är under 3°. */
 export function isStraightAt(route, s) {
   const i0 = Math.max(0, Math.round((s - 30) / route.step));
