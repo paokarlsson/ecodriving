@@ -634,7 +634,7 @@ function renderOverview() {
   $('ov-trailer-text').textContent = `Släpvagn (max ${TRAILER_MAX_KMH} km/h)`;
   $('ov-fav').hidden = plan.demo || store.favorites.some(f => f.name === dest.name);
   renderBackgroundStatus();
-  requestAnimationFrame(() => drawOverview($('ov-map'), route, targets));
+  requestAnimationFrame(() => drawOverview($('ov-map'), route, targets, plan.curves));
 }
 function legendExtra(k) {
   if (k === 'curve' && plan.curves && plan.curves.length) {
@@ -1173,7 +1173,7 @@ $('d-stop').addEventListener('click', () => {
   else back();
 });
 window.addEventListener('resize', () => {
-  if (!$('overview').hidden && plan) drawOverview($('ov-map'), plan.route, plan.targets);
+  if (!$('overview').hidden && plan) drawOverview($('ov-map'), plan.route, plan.targets, plan.curves);
 });
 
 // ---------- Sammanfattning ----------
