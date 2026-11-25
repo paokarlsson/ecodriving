@@ -4,6 +4,8 @@
 export const ORS_BASE = 'https://api.heigit.org';
 const DIRECTIONS = '/openrouteservice/v2/directions/driving-car/geojson';
 const GEOCODE = '/pelias/v1/search';
+const AUTOCOMPLETE = '/pelias/v1/autocomplete';
+import { haversine } from './geo.js';
 
 export class ApiError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -60,16 +62,34 @@ export async function getRoute(key, from, to, { signal } = {}) {
   };
 }
 
-/** Adressökning. Returnerar [{name, lat, lon}]. */
-export async function geocode(key, text, focus = null, { signal } = {}) {
-  const p = new URLSearchParams({ text, size: '6' });
+/** Svensk benämning av Pelias-lagren. */
+const LAYER = {
+  address: 'Adress', street: 'Gata', venue: 'Plats', locality: 'Ort', localadmin: 'Ort',
+  borough: 'Område', neighbourhood: 'Område', macrohood: 'Område', county: 'Kommun',
+  region: 'Län', postalcode: 'Postnummer', country: 'Land', coarse: 'Område',
+};
+
+/**
+ * Adressökning i Sverige. Med partial = true används Pelias autocomplete, som
+ * klarar början av ord (för sök medan man skriver). Returnerar
+ * [{name, lat, lon, kind, distance (m) | null}], närmast fokus först bland
+ * lika bra träffar (Pelias egen ordning behålls annars).
+ */
+export async function geocode(key, text, focus = null, { signal, partial = false, size = 10 } = {}) {
+  const p = new URLSearchParams({ text, 'boundary.country': 'SE' });
+  if (!partial) p.set('size', String(size));   // autocomplete tar inte size
   if (focus) { p.set('focus.point.lat', focus.lat.toFixed(4)); p.set('focus.point.lon', focus.lon.toFixed(4)); }
-  const json = await call(`${ORS_BASE}${GEOCODE}?${p}`, { signal, headers: { 'Authorization': key } });
-  return (json.features || []).map(f => ({
-    name: f.properties?.label || f.properties?.name || 'Okänd plats',
-    lat: f.geometry.coordinates[1],
-    lon: f.geometry.coordinates[0],
-  }));
+  const json = await call(`${ORS_BASE}${partial ? AUTOCOMPLETE : GEOCODE}?${p}`, { signal, headers: { 'Authorization': key } });
+  return (json.features || []).slice(0, size).map(f => {
+    const lat = f.geometry.coordinates[1], lon = f.geometry.coordinates[0];
+    const label = f.properties?.label || f.properties?.name || 'Okänd plats';
+    return {
+      name: label.replace(/, Sverige$/, ''),
+      lat, lon,
+      kind: LAYER[f.properties?.layer] || null,
+      distance: focus ? haversine(focus.lat, focus.lon, lat, lon) : null,
+    };
+  });
 }
 
 /** Testanrop: en kort rutt i Stockholm. */

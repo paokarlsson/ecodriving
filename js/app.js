@@ -400,27 +400,69 @@ $('home-addkey').addEventListener('click', () => show('key'));
 $('open-settings').addEventListener('click', () => show('settings'));
 
 let lastFocus = null;
-$('search-form').addEventListener('submit', async e => {
-  e.preventDefault();
-  const q = $('search-input').value.trim();
-  if (!q) return;
+let searchCtrl = null, searchTimer = null, searchSeq = 0, noAutocomplete = false;
+
+/**
+ * Sök: medan man skriver (efter 3 tecken och en kort paus) används
+ * autocomplete, som klarar början av ord; Sök-knappen gör en vanlig sökning.
+ */
+async function runSearch(q, partial) {
+  const seq = ++searchSeq;
+  searchCtrl?.abort();
+  searchCtrl = new AbortController();
   const ul = $('search-results');
-  ul.innerHTML = '<li><span class="pick"><span class="spinner"></span>Söker…</span></li>';
+  if (!partial || !ul.children.length) ul.innerHTML = '<li><span class="pick"><span class="spinner"></span>Söker…</span></li>';
   try {
     if (!lastFocus) { try { lastFocus = await startPosition(); } catch { /* sök utan fokus */ } }
-    const res = await geocode(store.key, q, lastFocus);
-    ul.innerHTML = '';
-    if (!res.length) { ul.innerHTML = '<li><span class="pick">Inga träffar.</span></li>'; return; }
-    for (const r of res) {
-      const li = document.createElement('li');
-      li.innerHTML = `<button class="pick">${esc(r.name)}</button>`;
-      li.querySelector('button').addEventListener('click', () => planRoute(r));
-      ul.appendChild(li);
+    const signal = searchCtrl.signal;
+    let res;
+    try {
+      res = await geocode(store.key, q, lastFocus, { partial: partial && !noAutocomplete, signal });
+    } catch (e) {
+      // Finns inte autocomplete hos tjänsten: sök vanligt även medan man skriver
+      if (!(partial && !noAutocomplete && e.code === 'route')) throw e;
+      noAutocomplete = true;
+      res = await geocode(store.key, q, lastFocus, { signal });
     }
+    if (seq !== searchSeq) return;   // en nyare sökning har startat
+    renderSearchResults(res);
   } catch (err) {
+    if (err.name === 'AbortError' || seq !== searchSeq) return;
     ul.innerHTML = '';
-    toast(err.message, true);
+    // Medan man skriver visas bara fel som gäller nyckel och kvot
+    if (!partial || err.code === 'key' || err.code === 'quota') toast(err.message, true);
   }
+}
+
+function renderSearchResults(res) {
+  const ul = $('search-results');
+  ul.innerHTML = '';
+  if (!res.length) { ul.innerHTML = '<li><span class="pick">Inga träffar i Sverige.</span></li>'; return; }
+  for (const r of res) {
+    const li = document.createElement('li');
+    const meta = [r.kind, r.distance != null ? fmtDist(r.distance) : null].filter(Boolean).join(' · ');
+    li.innerHTML = `<button class="pick">${esc(r.name)}${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</button>`;
+    li.querySelector('button').addEventListener('click', () => planRoute(r));
+    ul.appendChild(li);
+  }
+}
+
+$('search-form').addEventListener('submit', e => {
+  e.preventDefault();
+  clearTimeout(searchTimer);
+  const q = $('search-input').value.trim();
+  if (q) runSearch(q, false);
+});
+
+$('search-input').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = $('search-input').value.trim();
+  if (q.length < 3) {
+    searchSeq++; searchCtrl?.abort();
+    if (!q) $('search-results').innerHTML = '';
+    return;
+  }
+  searchTimer = setTimeout(() => runSearch(q, true), 350);
 });
 
 function renderFavorites() {
