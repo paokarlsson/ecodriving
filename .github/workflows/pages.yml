@@ -11,9 +11,11 @@ permissions:
   pages: write
   id-token: write
 
+# En körning per gren. Pull requests avbryter äldre körningar på samma gren,
+# men en publicering på main avbryts aldrig halvvägs.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -25,13 +27,13 @@ jobs:
           node-version: 22
       - run: npm test
 
-  deploy:
+  # Bygg och ladda upp i ett eget jobb. När publiceringsjobbet startar är
+  # filerna då helt klara hos GitHub; i samma jobb hände det att
+  # deploy-pages inte hittade dem ("No artifacts named github-pages").
+  build:
     if: github.event_name != 'pull_request'
     needs: test
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Samla appens filer
@@ -42,5 +44,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
