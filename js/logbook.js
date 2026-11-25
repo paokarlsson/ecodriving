@@ -21,7 +21,7 @@ export const SAMPLE_FIELDS = [
 const r = (x, d) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d);
 
 export class DriveLog {
-  /** meta: {kind, dest, demo, trailer, settings, model, route} */
+  /** meta: {kind, dest, demo, settings, model, route} */
   constructor(meta, now = Date.now()) {
     this.id = `${meta.kind || 'drive'}-${new Date(now).toISOString().replace(/[:.]/g, '-')}`;
     this.meta = meta;

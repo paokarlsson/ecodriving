@@ -21,6 +21,12 @@ export const COAST = {
   heavierMax: 0.3,   // m/s²: bromsade mer än modellen → broms eller fel
   minFlatDecel: 0.02, // m/s²: lägre på plan väg (lutningen borträknad) är inte rullning (gas eller fel höjddata)
   segWeight: 3,      // en rullning väger högst som 3 punkter
+  forget: 0.93,      // tidigare rullningar väger så mycket mindre för varje ny (halveras efter ca 10)
+  priorFloor: 0.15,  // rullprovet tappar vikt på samma sätt, men aldrig under 15 %
+  liveMinDur: 3,     // s rullning (efter början) innan modellen justeras under rullningen
+  liveFullDur: 8,    // s: därefter gäller hela avvikelsen
+  liveMin: -0.25,    // m/s², största justering lättare …
+  liveMax: 0.4,      // … och tyngre än modellen
   priorPoints: 7,    // rullprovet som startvärde: 7 punkter mellan 30 och 90 km/h …
   priorWeight: 3,    // … med vikt 3 var (≈ 7 rullningar)
 };
@@ -79,6 +85,31 @@ export class CoastLearner {
     seg.minV = Math.min(seg.minV, p.v);
     if (p.v < COAST.vMin) return this.cut('låg fart');
     return null;
+  }
+
+  /**
+   * Justering av modellen under en pågående rullning: hur mycket mer (+) eller
+   * mindre (−) bilen bromsar just nu än modellen säger, i m/s² att lägga på A.
+   * Mäts över hela rullningen hittills (efter början, backen borträknad) och
+   * vägs in gradvis: inget de första sekunderna, fullt efter liveFullDur.
+   * null när ingen rullning pågår (gas, broms eller för kort).
+   */
+  live(model) {
+    const seg = this.seg;
+    if (!seg) return null;
+    const t0 = seg.samples[0].t + COAST.skipStart;
+    const use = seg.samples.filter(p => p.t >= t0);
+    if (use.length < 3) return null;
+    const a = use[0], b = use[use.length - 1];
+    const dur = b.t - a.t;
+    if (dur < COAST.liveMinDur) return null;
+    const grade = use.reduce((sum, p) => sum + (p.grade || 0), 0) / use.length;
+    const meas = (a.v - b.v) / dur - G * grade;
+    // Modellens medelinbromsning över samma farter (utan backen)
+    const pred = use.reduce((sum, p) => sum + model.A + model.C * p.v * p.v, 0) / use.length;
+    const w = Math.min(1, (dur - COAST.liveMinDur) / (COAST.liveFullDur - COAST.liveMinDur) * 0.7 + 0.3);
+    const dA = Math.max(COAST.liveMin, Math.min(COAST.liveMax, w * (meas - pred)));
+    return { dA, meas, pred, dur, w };
   }
 
   /** Avslutar pågående rullning (t.ex. när körningen slutar). */
@@ -148,10 +179,15 @@ export class CoastStats {
     this.sxx = o.sxx || 0; this.sxy = o.sxy || 0;
     this.segments = o.segments || 0; this.points = o.points || 0;
     this.updated = o.updated || null;
+    this.priorW = o.priorW ?? 1; // rullprovets andel av sin fulla vikt
   }
 
   add(points, now = Date.now()) {
     if (!points.length) return;
+    // Nyare rullningar väger mer: däckbyte, årstid och last syns efter några rullningar
+    const f = COAST.forget;
+    this.sw *= f; this.sx *= f; this.sy *= f; this.sxx *= f; this.sxy *= f;
+    this.priorW = Math.max(COAST.priorFloor, this.priorW * f);
     const w = Math.min(1, COAST.segWeight / points.length);
     for (const p of points) {
       const x = p.v * p.v;
@@ -169,7 +205,7 @@ export class CoastStats {
     let { sw, sx, sy, sxx, sxy } = this;
     for (let k = 0; k < COAST.priorPoints; k++) {
       const v = (30 + (60 * k) / (COAST.priorPoints - 1)) * KMH;
-      const x = v * v, y = prior.A + prior.C * x, w = COAST.priorWeight;
+      const x = v * v, y = prior.A + prior.C * x, w = COAST.priorWeight * this.priorW;
       sw += w; sx += w * x; sy += w * y; sxx += w * x * x; sxy += w * x * y;
     }
     const mx = sx / sw, my = sy / sw;
@@ -183,7 +219,7 @@ export class CoastStats {
   }
 
   toJSON() {
-    const { sw, sx, sy, sxx, sxy, segments, points, updated } = this;
-    return { sw, sx, sy, sxx, sxy, segments, points, updated };
+    const { sw, sx, sy, sxx, sxy, segments, points, updated, priorW } = this;
+    return { sw, sx, sy, sxx, sxy, segments, points, updated, priorW };
   }
 }

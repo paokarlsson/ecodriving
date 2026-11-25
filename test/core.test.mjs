@@ -258,3 +258,28 @@ test('rekommenderad kurvfart: lagom sidokraft, mindre i hög fart', () => {
   assert.ok(c.sEnd > c.s && c.radius > 25 && c.radius < 50, JSON.stringify(c));
   assert.equal(c.dir, 'right');
 });
+
+test('under rullning varnar motorn för broms om modellen visar att farten inte räcker', async () => {
+  const { DriveEngine } = await import('../js/drive.js');
+  const { buildRoute } = await import('../js/route.js');
+  const coords = [];
+  for (let i = 0; i <= 60; i++) coords.push([18 + i * 0.0009, 59]); // rak väg ca 3 km österut
+  const route = buildRoute(coords);
+  const target = { s: 2000, v: 30 / 3.6, kind: 'limit', id: 1 };
+  const e = new DriveEngine(route, [target], { A: 0.15, C: 0.00025 }, { marginS: 0 });
+  const at = s => { const f = s / route.length; return { lat: 59, lon: 18 + f * 60 * 0.0009 }; };
+  let t = 0, view;
+  for (let s = 0; s < 1990; s += 25) {
+    t += 1;
+    ({ view } = e.update({ t, ...at(s), speed: 80 / 3.6, accuracy: 5 }));
+    if (view.mode === 'coasting') break;
+  }
+  assert.equal(view.mode, 'coasting');
+  assert.ok(!view.brakeNeeded);
+  // Bilen rullar lättare än modellen trodde: modellen justeras, farten räcker inte längre utan broms
+  e.model = { A: 0.02, C: 0.0001 };
+  t += 1;
+  ({ view } = e.update({ t, ...at(e.s + 20), speed: 78 / 3.6, accuracy: 5 }));
+  assert.equal(view.mode, 'coasting');
+  assert.ok(view.brakeNeeded);
+});

@@ -12,6 +12,7 @@ export const DRIVE = {
   followWindow: 4,     // s efter signal+marginal då släppt gas ska synas
   followDrop: 0.4,     // m/s fartminskning som räknas som släppt gas
   arriveDist: 25,      // m kvar till målet
+  brakeSlack: 1.1,     // m/s över rullkurvan som tolereras under rullning
 };
 
 export class DriveEngine {
@@ -106,7 +107,8 @@ export class DriveEngine {
         // Föraren gav gas igen – sluta visa "rullar".
         this.coast = null;
       } else {
-        return { view: this.view('coasting', { target: c.target, distToTarget: c.target.s - s, brakeNeeded: c.brakeNeeded }), events };
+        const brakeNeeded = c.brakeNeeded || this.overCoastCurve(c.target, v, s);
+        return { view: this.view('coasting', { target: c.target, distToTarget: c.target.s - s, brakeNeeded }), events };
       }
     }
 
@@ -140,7 +142,8 @@ export class DriveEngine {
     }
     if (dist <= 0) {
       // Redan signalerat för detta mål men föraren gav gas igen.
-      return { view: this.view('coasting', { target: best.target, distToTarget: best.target.s - s, brakeNeeded: best.rp.brakeNeeded }), events };
+      const brakeNeeded = best.rp.brakeNeeded || this.overCoastCurve(best.target, v, s);
+      return { view: this.view('coasting', { target: best.target, distToTarget: best.target.s - s, brakeNeeded }), events };
     }
     const mode = dist <= DRIVE.approachDist ? 'approach' : 'free';
     return {
@@ -161,6 +164,16 @@ export class DriveEngine {
     for (const t of targets) {
       if (old.some(o => Math.abs(o.s - t.s) < 40) || (this.coast && Math.abs(this.coast.target.s - t.s) < 40)) this.fired.add(t.id);
     }
+  }
+
+  /**
+   * Räcker rullningen fram till målet med nuvarande modell (som kan ha
+   * justerats under rullningen)? Mer än ca 4 km/h över rullkurvan betyder
+   * att broms kan behövas.
+   */
+  overCoastCurve(target, v, s) {
+    const rp = releasePoint(target, Math.max(0, v - DRIVE.brakeSlack), s, this.gradeAt, this.model);
+    return !!rp.brakeNeeded || !!rp.late;
   }
 
   setPaused(reason, events) {

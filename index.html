@@ -153,9 +153,6 @@
       <div class="ov-summary" id="ov-summary"></div>
       <p class="hint" id="ov-bg" hidden></p>
       <ul class="legend" id="ov-counts"></ul>
-      <label class="field check">
-        <input type="checkbox" id="ov-trailer"> <span id="ov-trailer-text">Släpvagn</span>
-      </label>
       <p class="hint" id="ov-warn" hidden></p>
     </div>
     <div class="actions">
@@ -214,6 +211,7 @@
       </div>
     </div>
     <canvas id="d-map" class="map drive-map" aria-hidden="true"></canvas>
+    <canvas id="d-graph" class="map drive-map" role="img" aria-label="Fartkurva: beräknad rullning mot målet och din fart. Tryck för karta." hidden></canvas>
     <div class="actions drive-actions">
       <button class="btn ghost" id="d-stop">Avsluta</button>
     </div>
@@ -293,13 +291,6 @@
           <input type="range" id="set-rb" min="15" max="40" step="5">
         </label>
         <button class="btn small ghost" id="set-test-sound">Testa ljud</button>
-      </div>
-
-      <h2 class="section-title">Släpvagn</h2>
-      <div class="card">
-        <label class="field check">
-          <input type="checkbox" id="set-trailer"> <span>Släpvagn (max 80 km/h)</span>
-        </label>
       </div>
 
       <h2 class="section-title">Data</h2>

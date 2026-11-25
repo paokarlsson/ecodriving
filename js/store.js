@@ -22,7 +22,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   aLat: 2.45,          // sidokraft i kurvor (m/s²), 0,25 g
   giveWayKmh: 20,
   roundaboutKmh: 25,
-  trailer: false,      // släpvagnsläge: högst 80 km/h
   learnCoast: true,       // förfina rullmodellen av rullningar under körning
 });
 
@@ -43,6 +42,9 @@ export const store = {
   get gyroAxis() { return get('gyroAxis'); },
   set gyroAxis(v) { set('gyroAxis', v); },
   /** Inlärd framåtaxel för accelerometern (gas/broms) {axis: [x, y, z], r2, date}. */
+  /** Fartkurvan i stället för kartan nära ett mål (false = alltid karta). */
+  get driveGraph() { return get('driveGraph', true); },
+  set driveGraph(v) { set('driveGraph', v); },
   get accAxis() { return get('accAxis'); },
   set accAxis(v) { set('accAxis', v); },
   /** Inlärda rullningar: {car: CoastStats-JSON}. */

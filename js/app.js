@@ -8,7 +8,6 @@ import { DEFAULT_MODEL, decel } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
 import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
-import { trailerLimits, TRAILER_MAX_KMH } from './trailer.js';
 import { LateralMeter, CurveTracker, isStraightAt, routeYaw, curveRadiusText } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
 import { RawRecorder, readRaw, deleteRaw, persistStorage } from './rawstore.js';
@@ -23,6 +22,7 @@ const safeStorage = {
 const logStore = makeLogStore(safeStorage, { onRemove: id => deleteRaw(id) });
 import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
+import { GRAPH, coastProfile, releaseOnProfile, drawSpeedGraph } from './speedgraph.js';
 import { unlockAudio, sounds, speak } from './audio.js';
 import {
   isIOS, needsMotionPermission, requestMotionPermission, requestLocationOnce, startPosition, locationGranted,
@@ -220,7 +220,7 @@ $('calib-start').addEventListener('click', async () => {
 
   const rec = new CoastRecorder(ev => onCalibEvent(rec, ev));
   calib.rec = rec;
-  calib.log = new DriveLog({ kind: 'calibration', run: n, trailer: trailerOn(), settings: { ...store.settings } });
+  calib.log = new DriveLog({ kind: 'calibration', run: n, settings: { ...store.settings } });
   calib.stops.push(keepAwake());
   calib.stops.push(watchGps(obs => {
     calib.lastObs = obs;
@@ -349,7 +349,6 @@ $('calib-later').addEventListener('click', () => {
 });
 
 // ---------- Hem ----------
-const trailerOn = () => !!store.settings.trailer;
 /** Modell från rullprovet (eller typvärden). */
 function baseModel() { return store.calibration || DEFAULT_MODEL; }
 const coastKey = () => 'car';
@@ -361,18 +360,15 @@ function model() {
   const fit = coastStats().fit(base);
   return fit ? { ...base, A: fit.A, C: fit.C, coastSegments: fit.segments } : base;
 }
-/** Inställningar som påverkar fartmålen; med släp gäller högst 80 km/h. */
-function planSettings() {
-  const s = store.settings;
-  return s.trailer ? { ...s, maxKmh: TRAILER_MAX_KMH } : s;
-}
+/** Inställningar som påverkar fartmålen. */
+function planSettings() { return store.settings; }
 /** Fartmål ur vägdata för aktuellt läge. Kan räknas om utan ny hämtning. */
 function computeTargets(p) {
   const s = planSettings();
-  const limits = s.maxKmh ? trailerLimits(p.rawLimits, s.maxKmh) : p.rawLimits;
+  const limits = p.rawLimits;
   const targets = buildTargets(p.route, p.elements, limits, s);
   const curves = curveTargets(p.route, s.aLat, { limits });
-  return { ...p, limits, targets, curves, trailer: !!s.trailer };
+  return { ...p, limits, targets, curves };
 }
 
 // ---------- Installera som app ----------
@@ -422,24 +418,16 @@ $('install-later').addEventListener('click', () => { store.installDismissed = Da
 
 function enterHome() {
   const c = store.calibration;
-  const tr = trailerOn();
   $('home-calib').innerHTML =
-    `<button class="chip ${tr ? 'on' : ''}" id="chip-trailer" aria-pressed="${tr}">${tr ? `Med släpvagn · max ${TRAILER_MAX_KMH} km/h` : 'Utan släpvagn'}</button>` +
     (c
       ? `<button class="chip ok" id="chip-calib">✓ Kalibrerad · ${esc(describeModel(model()))}</button>`
       : `<button class="chip todo" id="chip-calib">Inte kalibrerad – gör ett rullprov</button>`);
   $('chip-calib').addEventListener('click', () => show('calib'));
-  $('chip-trailer').addEventListener('click', () => { setTrailer(!trailerOn()); enterHome(); });
   if (store.key) locationGranted().then(ok => { if (ok) startPosition().catch(() => {}); });
   $('home-nokey').hidden = !!store.key;
   $('search-form').hidden = !store.key;
   renderFavorites();
   renderInstall();
-}
-
-function setTrailer(on) {
-  store.settings = { ...store.settings, trailer: on };
-  toast(on ? `Släpvagnsläge: max ${TRAILER_MAX_KMH} km/h.` : 'Släpvagnsläge av.');
 }
 
 $('home-addkey').addEventListener('click', () => show('key'));
@@ -720,8 +708,6 @@ function renderOverview() {
   $('ov-warn').innerHTML = w.map(esc).join('<br>');
   $('ov-warn').hidden = !w.length;
   $('ov-start').disabled = false;
-  $('ov-trailer').checked = trailerOn();
-  $('ov-trailer-text').textContent = `Släpvagn (max ${TRAILER_MAX_KMH} km/h)`;
   $('ov-fav').hidden = plan.demo || store.favorites.some(f => f.name === dest.name);
   renderBackgroundStatus();
   requestAnimationFrame(() => drawOverview($('ov-map'), route, targets, plan.curves));
@@ -742,10 +728,6 @@ const PLURAL = {
   limit: 'sänkta gränser', give_way: 'väjningsplikter', stop: 'stopplikter',
 };
 
-$('ov-trailer').addEventListener('change', e => {
-  setTrailer(e.target.checked);
-  if (plan) { plan = computeTargets(plan); renderOverview(); }
-});
 
 $('ov-fav').addEventListener('click', () => {
   if (!plan || plan.demo) return;
@@ -770,7 +752,10 @@ function startDrive() {
   unlockAudio();
   if (needsMotionPermission()) requestMotionPermission();
   const s = store.settings;
-  drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: s.marginS });
+  drive.baseModel = model();
+  drive.liveAdj = null;
+  drive.engine = new DriveEngine(plan.route, plan.targets, drive.baseModel, { marginS: s.marginS });
+  resetSpeedGraph();
   drive.coastStart = null;
   drive.rerouting = false;
   drive.meter = new LateralMeter();
@@ -791,7 +776,7 @@ function startDrive() {
   drive.log = new DriveLog({
     kind: 'drive',
     dest: plan.dest ? { name: plan.dest.name, lat: plan.dest.lat, lon: plan.dest.lon } : null,
-    demo: !!plan.demo, trailer: trailerOn(),
+    demo: !!plan.demo,
     settings: { ...store.settings },
     model: { ...model(), source: modelSource() },
     route: routeMeta(plan),
@@ -825,8 +810,7 @@ function startDrive() {
     drive.stops.push(watchCompass(h => { drive.compass = h; drive.raw?.addCompass(Date.now() / 1000, h); }));
     drive.stops.push(watchMotion(onDriveMotion));
   }
-  $('d-limit').classList.toggle('trailer', trailerOn());
-  if (store.settings.voice && !drive.muted) speak(`${trailerOn() ? 'Släpvagnsläge. ' : ''}Kör försiktigt. Bromsen används alltid vid behov.`);
+  if (store.settings.voice && !drive.muted) speak(`Kör försiktigt. Bromsen används alltid vid behov.`);
 }
 
 /** Ruttens fartmål och kurvor i loggen. */
@@ -907,6 +891,7 @@ function handleCoastSegment(seg, t) {
   store.coastLearn = { ...(store.coastLearn || {}), [coastKey()]: st.toJSON() };
   drive.coastUsed++;
   const m = model();
+  drive.baseModel = m;
   if (drive.engine) drive.engine.model = m;
   drive.coast.setModel(m);
 }
@@ -1116,7 +1101,7 @@ function trackCurves(view, obs) {
   drive.meter.setStraight(v < 0.5 || isStraightAt(plan.route, s));
   for (const ev of drive.tracker.update(s, obs.t, v, drive.meter)) {
     if (ev.type === 'exit') {
-      const rec = { ...ev.record, trailer: trailerOn() };
+      const rec = { ...ev.record };
       drive.curveLog.push(rec);
       drive.log?.event(obs.t, 'curve', {
         s: rec.s, dir: rec.dir, radiusM: rec.radius, radiusMeasM: rec.radiusMeas, accPeakG: rec.accPeakG,
@@ -1157,6 +1142,7 @@ function onDriveObs(obs) {
   drive.lastObs = obs;
   if (!plan.demo) drive.raw?.addGps(obs);
   const { view, events } = drive.engine.update(obs);
+  recordSpeed(view, obs);
   if (!plan.demo && drive.meter) {
     const onRoute = !view.paused && view.mode !== 'paused';
     const rt = onRoute && prevObs ? routeTurnBetween(plan.route, prevS, drive.engine.s) : null;
@@ -1178,6 +1164,7 @@ function onDriveObs(obs) {
     });
     if (seg) handleCoastSegment(seg, obs.t);
   }
+  applyLiveCoast(view);
   for (const ev of events) handleDriveEvent(ev, obs);
   if (drive.engine) renderDrive(view, obs);
 }
@@ -1190,6 +1177,7 @@ function logDrive(view, obs, events) {
   L.sample(obs.t, {
     s: view.s, lat: obs.lat, lon: obs.lon, kmh: (obs.speed ?? view.v ?? 0) * 3.6, acc: obs.accuracy,
     mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, lonG: m?.lonG, rel: view.distToRelease, alt: obs.alt,
+    coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
   });
   for (const ev of events) {
     const tg = ev.target;
@@ -1255,6 +1243,7 @@ async function reroute(obs) {
       apiRoute: { from: { lat: obs.lat, lon: obs.lon }, to: { lat: plan.dest.lat, lon: plan.dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
     recordApi();
     drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: store.settings.marginS });
+    resetSpeedGraph();
     drive.engine.stats = stats;
     drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
     drive.log?.event(obs.t, 'reroute', { lat: obs.lat, lon: obs.lon, route: routeMeta(plan) });
@@ -1278,6 +1267,7 @@ function setRing(mode, main, sub, progress) {
 }
 
 function renderDrive(view, obs = null) {
+  drive.lastView = view;
   $('d-speed').textContent = kmh(view.v || 0);
   $('d-remaining').textContent = view.remaining != null ? fmtDist(view.remaining) + ' kvar' : '';
   let target = '';
@@ -1309,11 +1299,89 @@ function renderDrive(view, obs = null) {
   renderSigns(view);
   if (plan) {
     const s = view.s || 0;
-    const moving = (view.v || 0) > 3;
-    const heading = moving || drive.compass == null ? smoothHeading(plan.route, s) : drive.compass;
-    drawDrive($('d-map'), plan.route, plan.targets, s, heading, { limits: plan.limits, curves: plan.curves });
+    const graph = speedGraphData(view);
+    $('d-graph').hidden = !graph;
+    $('d-map').hidden = !!graph;
+    if (graph) drawSpeedGraph($('d-graph'), graph);
+    else {
+      const moving = (view.v || 0) > 3;
+      const heading = moving || drive.compass == null ? smoothHeading(plan.route, s) : drive.compass;
+      drawDrive($('d-map'), plan.route, plan.targets, s, heading, { limits: plan.limits, curves: plan.curves });
+    }
   }
 }
+
+/**
+ * Under en rullning mot ett mål justeras modellen efter hur bilen faktiskt
+ * rullar just nu (vind, väglag, last). Gäller släppsignal, bromsvarning och
+ * fartkurva tills rullningen tar slut; den sparade modellen ändras inte här.
+ */
+function applyLiveCoast(view) {
+  if (!drive.engine || !drive.coast) return;
+  const base = drive.baseModel || model();
+  const live = view.mode === 'coasting' ? drive.coast.live(base) : null;
+  const was = drive.liveAdj;
+  drive.liveAdj = live;
+  drive.engine.model = live ? { ...base, A: base.A + live.dA } : base;
+  if (live && !was) drive.log?.event(drive.lastObs?.t, 'liveCoast', { dA: Math.round(live.dA * 1000) / 1000, measured: Math.round(live.meas * 1000) / 1000, predicted: Math.round(live.pred * 1000) / 1000 });
+}
+
+// ---------- Fartkurva ----------
+function resetSpeedGraph() {
+  drive.speedHist = [];
+  drive.graph = { key: null, profile: null, release: null };
+}
+
+/** Förarens fart längs rutten, för den svarta linjen i grafen. */
+function recordSpeed(view, obs) {
+  const h = drive.speedHist || (drive.speedHist = []);
+  if (view.mode === 'paused' || view.paused || view.s == null) return;
+  const v = obs.speed ?? view.v;
+  if (v == null || !Number.isFinite(v)) return;
+  const last = h[h.length - 1];
+  if (last && view.s < last[0] - 30) h.length = 0; // ny rutt eller hopp bakåt
+  if (last && Math.abs(view.s - last[0]) < 0.5) last[1] = v;
+  else h.push([view.s, v]);
+  while (h.length && h[0][0] < view.s - GRAPH.histKeep) h.shift();
+}
+
+/**
+ * Grafens data när den ska visas: ett mål närmar sig (släpp om … eller
+ * rullar), inom GRAPH.maxAhead, och föraren har inte valt kartan.
+ */
+function speedGraphData(view) {
+  if (store.driveGraph === false) return null;
+  if (view.mode !== 'approach' && view.mode !== 'coasting') return null;
+  const target = view.target;
+  const s = view.s || 0, v = view.v || 0;
+  if (!target || target.s - s > GRAPH.maxAhead || target.s < s) return null;
+  const m = drive.engine?.model || model();
+  const gr = drive.graph || (drive.graph = { key: null, profile: null, release: null });
+  const key = `${target.id ?? target.s}|${target.v}|${m.A.toFixed(3)}|${m.C}`;
+  if (gr.key !== key) {
+    const grade = plan.route.hasEle ? x => gradeAt(plan.route, x) : () => 0;
+    gr.profile = coastProfile(target, Math.max(0, target.s - GRAPH.maxAhead - GRAPH.behind - 100), grade, m);
+    gr.key = key;
+  }
+  // Släpp-punkten följer farten fram till släppet och ligger sedan still
+  const id = target.id ?? target.s;
+  if (view.mode === 'approach') {
+    const r = releaseOnProfile(gr.profile, v);
+    gr.release = { id, s: r };
+  } else if (!gr.release || gr.release.id !== id || gr.release.s == null) {
+    gr.release = { id, s };
+  }
+  return { s, v, hist: drive.speedHist || [], target, profile: gr.profile, releaseS: gr.release.s, adjusted: !!drive.liveAdj };
+}
+
+/** Ett tryck växlar mellan fartkurva och karta; valet sparas. */
+function toggleDriveGraph() {
+  store.driveGraph = store.driveGraph === false;
+  toast(store.driveGraph ? 'Fartkurvan visas när ett mål närmar sig.' : 'Kartan visas hela tiden. Tryck på kartan för fartkurvan.');
+  if (drive.engine && drive.lastView) renderDrive(drive.lastView, drive.lastObs);
+}
+$('d-graph').addEventListener('click', toggleDriveGraph);
+$('d-map').addEventListener('click', toggleDriveGraph);
 
 /** Hastighetsgräns och rekommenderad kurvfart vid bilens läge. */
 function renderSigns(view) {
@@ -1450,7 +1518,6 @@ function enterSettings() {
   bindRange('set-giveway', 'giveWayKmh', v => `${v} km/h`, s);
   bindRange('set-rb', 'roundaboutKmh', v => `${v} km/h`, s);
   $('set-voice').checked = s.voice;
-  $('set-trailer').checked = s.trailer;
 }
 /** Komfort i kurvor visas i g men sparas som m/s². */
 function bindGForce(s, id, key) {
@@ -1648,7 +1715,6 @@ async function shareLog(log) {
   } catch (e) { if (e.name !== 'AbortError') downloadLog(log, f); }
 }
 
-$('set-trailer').addEventListener('change', e => { setTrailer(e.target.checked); });
 /** Länk till appen med nyckeln som parameter: ?key=… */
 function shareLinkWithKey() {
   const url = new URL(location.href);
