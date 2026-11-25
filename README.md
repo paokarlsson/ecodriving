@@ -23,6 +23,12 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Gör ett **rullprov** (Inställningar → Kalibrering): i växel, ca 80 → 30 km/h på rak, plan väg, en gång i varje riktning.
 - Utan nyckel fungerar kalibreringen och den korta **testbanan**, som simulerar en körning i fyrdubbel fart.
 
+## Sökning
+
+- Söker i Sverige via OpenRouteService adressökning (Pelias): adresser, orter, byar och namngivna platser i OpenStreetMap. Kategorier som "bensinstation" fungerar inte.
+- Medan man skriver (från 3 tecken, efter en kort paus) används `autocomplete`, som klarar början av ord. Sök-knappen gör en vanlig sökning med upp till 10 träffar.
+- Varje träff visar typ (adress, ort, plats …) och avstånd fågelvägen från din position.
+
 ## Kurvor och släpvagn
 
 - **Kurvradien** räknas hörn för hörn i ruttens linje: varje hörn får den största båge som ryms i linjens geometri (avviker högst 5 m från hörnet och får plats på halva sträckorna till grannhörnen). Glest ritade hörn blir då mjuka kurvor som på den verkliga vägen, tätt ritade kurvor får sin riktiga radie och tvära korsningar förblir skarpa. Kurvor med mindre än 150 m emellan slås ihop.
