@@ -225,29 +225,28 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .drive-map { height: auto; flex: 1; min-height: 140px; margin: 8px 16px 0; width: calc(100% - 32px); }
 .drive-actions { padding-top: 8px; }
 
-/* Kurvkraft */
+/* G-plattan: kvadratisk, bollen dit kraften trycker föraren (broms upp, gas ner).
+   Färgfältet ritas i canvas (app.js drawGField), axlar och boll i SVG ovanpå. */
 .gmeter {
-  margin: 8px 16px 0; padding: 10px 14px; border-radius: var(--radius);
-  background: var(--surface); border: 1px solid var(--line); display: grid; gap: 6px;
+  margin: 8px 16px 0; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line);
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center;
 }
-.gm-row { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: 0.85rem; font-weight: 600; }
-.gm-big { font-size: 1.4rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--fg); }
-/* Skalan: grönt = upp till planerat, gult = upp till 150 %, rött längst ut.
-   Bollen: mitten = rakt fram, ut åt det håll kraften trycker föraren. */
-.gm-track {
-  position: relative; height: 30px; border-radius: 15px; overflow: hidden;
-  /* Mjuk gradient. Övergångarna ligger centrerade på zongränserna:
-     150 % av planerat vid 12,5 % / 87,5 % och 100 % vid 25 % / 75 %. */
-  background: linear-gradient(90deg,
-    #e5484d 0%, #e5484d 8%, #f2c230 17%, #f2c230 21%, #2fb36d 30%,
-    #2fb36d 70%, #f2c230 79%, #f2c230 83%, #e5484d 92%, #e5484d 100%);
-}
-.gm-center { position: absolute; top: 5px; bottom: 5px; left: 50%; width: 2px; margin-left: -1px; background: rgba(0,0,0,0.35); }
-.gm-ball {
-  position: absolute; top: 3px; width: 24px; height: 24px; margin-left: -12px; left: 50%;
-  border-radius: 50%; background: #fff; border: 3px solid #0a0f0c; box-shadow: 0 1px 5px rgba(0,0,0,0.5);
-  transition: left 0.15s linear;
-}
+.gm-pad { position: relative; width: min(40vw, 21vh, 190px); aspect-ratio: 1; max-width: 100%; }
+.gm-pad canvas, .gm-pad svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.gm-pad canvas { background: #2fb36d; }
+.gm-pad text { font: 700 8.5px system-ui, sans-serif; fill: #fff; letter-spacing: .06em; paint-order: stroke; stroke: rgba(0,0,0,.25); stroke-width: 2px; }
+.gm-axis { stroke: rgba(0,0,0,.28); stroke-width: 1.5; }
+.gm-coast { stroke: #fff; stroke-width: 2; stroke-dasharray: 4 3; opacity: .9; }
+.gm-ball { fill: #fff; stroke: #0a0f0c; stroke-width: 3; transition: cx 0.15s linear, cy 0.15s linear; }
+.gm-info { display: grid; gap: 6px; justify-items: start; min-width: 0; color: var(--muted); font-size: 0.85rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gm-info b { color: var(--fg); }
+.gm-big { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--fg); }
+.gm-chip { font-size: 0.8rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: var(--line); color: var(--muted); }
+.gm-chip.green { background: #2fb36d; color: #fff; }
+.gm-chip.blue { background: #2f80d8; color: #fff; }
+.gm-chip.yellow { background: #f2c230; color: #1a1400; }
+.gm-chip.red { background: #e5484d; color: #fff; }
 /* Siffran i zonens färg; gult text mörkare i ljust läge för att gå att läsa */
 .gm-big.green { color: var(--zone-green); }
 .gm-big.yellow { color: var(--zone-yellow); }

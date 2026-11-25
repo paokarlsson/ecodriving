@@ -12,6 +12,7 @@ export const LATERAL = {
   askFactor: 1.15,     // fråga när toppen är mer än 15 % över planerat
   maxMismatch: 0.30,   // gyrots och kartans svängvinkel får skilja högst 30 %
   minTurnForCheck: 15, // grader; kortare svängar kontrolleras inte
+  lonTau: 0.5,         // s, utjämning av gas/broms ur accelerometern
 };
 
 /**
@@ -78,6 +79,16 @@ export class LateralMeter {
     // Accelerometerkontroll: vågrät acceleration ur accelerationen med tyngdkraft
     this.gravSlow = null;      // tyngdkraften utjämnad över ca 20 s
     this.accH = 0;             // vågrät acceleration, utjämnad ca 0,7 s (m/s²)
+    // Längsled (gas/broms), m/s², positiv = farten ökar
+    this.ah = null;            // senaste vågräta accelerationsvektor i telefonens axlar
+    this.accInt = [0, 0, 0];   // summerad sedan förra GPS-positionen
+    this.accIntT = 0;
+    this.fwd = null;           // inlärd: längsacceleration = fwd · ah
+    this.fwdR2 = null;
+    this.lonReg = { M: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b: [0, 0, 0], ee: 0, n: 0, strong: 0, since: 0 };
+    this.lonAcc = 0;           // ur accelerometern, utjämnad (m/s²)
+    this.lonGps = 0;           // ur GPS-farten, utjämnad (m/s²)
+    this.lonGpsOk = false;
   }
 
   setSpeed(v) { this.v = Math.max(0, v || 0); }
@@ -104,7 +115,7 @@ export class LateralMeter {
       if (this.lastPlat != null) this.platInt += this.lastPlat * dt;
       this.intOk = true;
     }
-    if (m.gx != null) this.addAccel([m.gx, m.gy, m.gz], dt);
+    if (m.gx != null) this.addAccel([m.gx, m.gy, m.gz], dt, m.ax != null ? [m.ax, m.ay, m.az] : null);
     let wRight;
     if (this.axis) wRight = this.axis[0] * r[0] + this.axis[1] * r[1] + this.axis[2] * r[2];
     else if (this.lastPlat != null) wRight = this.lastPlat * (this.sign ?? this.defaultSign);
@@ -195,19 +206,85 @@ export class LateralMeter {
     }
   }
 
-  /** Accelerometerkontroll: vågrät acceleration ur accelerationen med tyngdkraft. */
-  addAccel(g, dt) {
-    if (!this.gravSlow) { this.gravSlow = g.slice(); return; }
+  /**
+   * Accelerometern: vågrät acceleration ur accelerationen med tyngdkraft
+   * (eller den linjära accelerationen om webbläsaren ger den). Storleken
+   * används för kontroll av sidokraften; vektorn för gas och broms.
+   */
+  addAccel(g, dt, lin = null) {
+    // Med linjär acceleration är g − lin ren tyngdkraft; annars drar en lång
+    // inbromsning med sig skattningen något (ca 10 % på några sekunder).
+    const hasLin = lin && lin.every(Number.isFinite);
+    const gs = hasLin ? g.map((x, i) => x - lin[i]) : g;
+    if (!this.gravSlow) { this.gravSlow = gs.slice(); return; }
     const k = dt / (20 + dt);
-    this.gravSlow = this.gravSlow.map((x, i) => x + k * (g[i] - x));
+    this.gravSlow = this.gravSlow.map((x, i) => x + k * (gs[i] - x));
     const n = Math.hypot(...this.gravSlow);
     if (!(n > 1)) return;
     const up = this.gravSlow.map(x => x / n);
-    const a = g.map((x, i) => x - this.gravSlow[i]);
+    const a = hasLin ? lin : g.map((x, i) => x - this.gravSlow[i]);
     const vert = a[0] * up[0] + a[1] * up[1] + a[2] * up[2];
-    const h = Math.hypot(a[0] - vert * up[0], a[1] - vert * up[1], a[2] - vert * up[2]);
+    const ah = a.map((x, i) => x - vert * up[i]);
+    const h = Math.hypot(ah[0], ah[1], ah[2]);
     const kk = dt / (0.7 + dt);
     this.accH += kk * (Math.min(h, 15) - this.accH);
+    // Stötar (gupp, telefonen knackas) räknas inte
+    if (h > 12) return;
+    this.ah = ah;
+    for (let q = 0; q < 3; q++) this.accInt[q] += ah[q] * dt;
+    this.accIntT += dt;
+    if (this.fwd) {
+      const lon = this.fwd[0] * ah[0] + this.fwd[1] * ah[1] + this.fwd[2] * ah[2];
+      const kl = dt / (LATERAL.lonTau + dt);
+      this.lonAcc += kl * (lon - this.lonAcc);
+    }
+  }
+
+  /**
+   * GPS-fartens förändring sedan förra positionen (m/s², positiv = ökar).
+   * Används som reserv för gas/broms och för att lära telefonens framåtaxel:
+   * accelerometerns medelvärde över samma intervall jämförs med fartändringen
+   * (minsta kvadrat), på samma sätt som gyrots axel lärs mot kursen.
+   * dvdt = null nollställer intervallet (lucka, dålig GPS).
+   */
+  learnLon(dvdt, learn = true) {
+    const T = this.accIntT, sum = this.accInt;
+    this.accInt = [0, 0, 0];
+    this.accIntT = 0;
+    if (dvdt == null || !Number.isFinite(dvdt) || Math.abs(dvdt) > 8) { this.lonGpsOk = false; return false; }
+    this.lonGps = this.lonGpsOk ? this.lonGps + 0.6 * (dvdt - this.lonGps) : dvdt;
+    this.lonGpsOk = true;
+    if (!learn || !(T > 0.3)) return false;
+    const m = sum.map(x => x / T);
+    const R = this.lonReg;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) R.M[i][j] += m[i] * m[j];
+      R.b[i] += m[i] * dvdt;
+    }
+    R.ee += dvdt * dvdt;
+    R.n++;
+    if (Math.abs(dvdt) > 0.4) R.strong++;
+    if (R.strong < 12 || R.n - R.since < 10) return false;
+    R.since = R.n;
+    const tr = R.M[0][0] + R.M[1][1] + R.M[2][2];
+    const k = solve3(R.M, R.b, 1e-3 * tr / 3);
+    if (!k) return false;
+    let kMk = 0;
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) kMk += k[i] * R.M[i][j] * k[j];
+    const kb = k[0] * R.b[0] + k[1] * R.b[1] + k[2] * R.b[2];
+    const r2 = 1 - (R.ee - 2 * kb + kMk) / R.ee;
+    if (!(r2 > 0.5)) return false;
+    const had = !!this.fwd;
+    this.fwd = k;
+    this.fwdR2 = r2;
+    return !had;
+  }
+
+  /** Längsacceleration (m/s², positiv = ökar): accelerometern när axeln är inlärd, annars GPS. */
+  longitudinal() {
+    if (this.fwd && this.ah) return { a: this.lonAcc, src: 'acc' };
+    if (this.lonGpsOk) return { a: this.lonGps, src: 'gps' };
+    return { a: 0, src: null };
   }
 
   /** Bakåtkompatibelt namn. */
@@ -229,7 +306,8 @@ export class LateralMeter {
   current() {
     const a = this.v * Math.abs(this.yaw);
     const side = -(this.v * this.yaw) / G;
-    return { a, g: a / G, yaw: this.yaw, side, accG: this.accH / G };
+    const lon = this.longitudinal();
+    return { a, g: a / G, yaw: this.yaw, side, accG: this.accH / G, lonG: lon.a / G, lonSrc: lon.src };
   }
 }
 
