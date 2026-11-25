@@ -42,6 +42,9 @@ export const store = {
   /** Inlärd gyroaxel {axis: [x, y, z], r2, date}. */
   get gyroAxis() { return get('gyroAxis'); },
   set gyroAxis(v) { set('gyroAxis', v); },
+  /** Inlärd framåtaxel för accelerometern (gas/broms) {axis: [x, y, z], r2, date}. */
+  get accAxis() { return get('accAxis'); },
+  set accAxis(v) { set('accAxis', v); },
   /** Inlärda rullningar: {car: CoastStats-JSON}. */
   get coastLearn() { return get('coastLearn', {}); },
   set coastLearn(v) { set('coastLearn', v); },

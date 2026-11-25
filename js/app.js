@@ -4,7 +4,7 @@ import { store, maskKey, DEFAULT_SETTINGS, osmCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
 import { buildRoute, headingAt, xyAt, curveTargets, gradeAt } from './route.js';
 import { fetchOsmAlongRoute, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
-import { DEFAULT_MODEL } from './physics.js';
+import { DEFAULT_MODEL, decel } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
 import { DriveEngine, releaseMessage } from './drive.js';
 import { demoData } from './demo.js';
@@ -777,6 +777,9 @@ function startDrive() {
   // Telefonen sitter oftast likadant: börja med förra körningens inlärda axel
   const ga = store.gyroAxis;
   if (ga && ga.method === 'interval' && Array.isArray(ga.axis) && !plan.demo) { drive.meter.axis = ga.axis; drive.meter.axisR2 = ga.r2; }
+  if (!plan.demo) useAccAxis(drive.meter);
+  drive.gtrail = [];
+  drive.gfieldKey = null;
   drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   drive.curveLog = [];
   drive.coast = new CoastLearner(model());
@@ -854,10 +857,12 @@ function saveDriveLog(stats = null) {
   }
   const m = drive.meter;
   if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, method: 'interval', date: new Date().toISOString() };
+  if (stats && m?.fwd && !plan?.demo) store.accAxis = { axis: m.fwd, r2: m.fwdR2, date: new Date().toISOString() };
   if (stats) drive.log.finish({
     ...stats, curves: (drive.curveLog || []).length,
     gyroAxis: m?.axis ? m.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
     gyroAxisR2: m?.axisR2 ?? null, gyroSign: m?.sign ?? null,
+    accAxis: m?.fwd ? m.fwd.map(x => Math.round(x * 1e5) / 1e5).join(',') : null, accAxisR2: m?.fwdR2 ?? null,
     coastFound: drive.coastFound ?? 0, coastUsed: drive.coastUsed ?? 0,
     modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
@@ -935,6 +940,29 @@ function learnGyroFromGps(meter, prev, cur, routeTurn = null) {
   return !had && !!meter.axis;
 }
 
+/**
+ * Gas och broms: GPS-fartens ändring sedan förra positionen, som reserv och
+ * för att lära telefonens framåtaxel. Sparar axeln och loggar första gången.
+ */
+function learnAccFromGps(meter, prev, cur, log, learn = true) {
+  if (!meter) return;
+  const dt = prev ? cur.t - prev.t : Infinity;
+  const ok = prev && dt > 0.3 && dt < 2.5 && cur.speed != null && prev.speed != null
+    && (cur.accuracy == null || cur.accuracy < 30);
+  const dvdt = ok ? (cur.speed - prev.speed) / dt : null;
+  // Under ca 7 km/h är GPS-farten för osäker för att lära av
+  if (meter.learnLon(dvdt, learn && ok && Math.max(cur.speed, prev.speed) > 2)) {
+    store.accAxis = { axis: meter.fwd, r2: meter.fwdR2, date: new Date().toISOString() };
+    log?.event(cur.t, 'accAxis', { axis: meter.fwd.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: meter.fwdR2 });
+  }
+}
+
+/** Telefonen sitter oftast likadant: börja med förra körningens framåtaxel. */
+function useAccAxis(meter) {
+  const a = store.accAxis;
+  if (a && Array.isArray(a.axis) && a.axis.length === 3) { meter.fwd = a.axis; meter.fwdR2 = a.r2; }
+}
+
 /** Signerad kursändring längs rutten mellan s0 och s1 (rad, höger positiv). */
 function routeTurnBetween(route, s0, s1) {
   const i0 = Math.max(0, Math.round(s0 / route.step)), i1 = Math.min(route.n - 1, Math.round(s1 / route.step));
@@ -963,32 +991,123 @@ function sampleCurve(t) {
 }
 
 /**
- * Sidokraftsbollen: i mitten rakt fram, åt höger i vänstersväng och tvärtom
- * (dit kraften trycker föraren). Det gröna bandet är planerad sidokraft.
+ * G-plattan: bollen rör sig dit kraften trycker föraren. Åt höger i
+ * vänstersväng och tvärtom, uppåt vid broms och nedåt vid gas. Fältet är
+ * symmetriskt: total kraft upp till planerad sidokraft är grönt, 150 % gult
+ * och 200 % (plattans kant) rött. Det blå stråket visar hur mycket bilen
+ * bromsar av sig själv när den rullar med släppt gas, i nuvarande fart och backe.
  */
+const GPAD = { R: 88, trail: 12, gMin: 0.02, coastBand: 0.035, still: 2 };
+
 function renderGMeter() {
-  const el = $('d-gmeter');
   if (!drive.meter) return;
   const tr = drive.tracker;
   const inCurve = tr && tr.inside();
   const planned = inCurve
     ? (tr.active.curve.v ** 2) / tr.active.curve.radius / 9.81
     : planSettings().aLat / 9.81;
-  const { g, side } = drive.meter.current();
-  // Skalan går till 200 % av planerat åt varje håll: grönt ≤ 100 %, gult ≤ 150 %, rött därefter
+  const c = drive.meter.current();
+  const v = drive.meter.v;
+  const lat = c.side, lon = c.lonSrc ? c.lonG : 0;
   const range = planned * 2;
-  const pos = 50 + Math.max(-1, Math.min(1, side / range)) * 47;
-  $('d-gball').style.left = `${pos}%`;
-  const zone = g <= planned ? 'green' : g <= planned * 1.5 ? 'yellow' : 'red';
+  const clamp = x => Math.max(-1, Math.min(1, x));
+  const toX = g => 100 + clamp(g / range) * GPAD.R;
+  const toY = g => 100 - clamp(-g / range) * GPAD.R; // broms (negativ) uppåt
+
+  // Rullningens inbromsning (g) i nuvarande fart och backe
+  const moving = v > GPAD.still;
+  let coastG = null;
+  if (moving) {
+    const grade = plan?.route?.hasEle ? gradeAt(plan.route, drive.engine?.s || 0) : 0;
+    coastG = -decel(v, grade, drive.engine?.model || model()) / 9.81;
+  }
+  drawGField(coastG == null ? null : coastG / range);
+
+  const tick = $('d-gcoast');
+  tick.style.display = coastG == null ? 'none' : '';
+  if (coastG != null) { const y = toY(coastG).toFixed(1); tick.setAttribute('y1', y); tick.setAttribute('y2', y); }
+
+  const x = toX(lat), y = toY(lon);
+  const ball = $('d-gball');
+  ball.setAttribute('cx', x.toFixed(1));
+  ball.setAttribute('cy', y.toFixed(1));
+  const trail = drive.gtrail || (drive.gtrail = []);
+  trail.push([x, y]);
+  while (trail.length > GPAD.trail) trail.shift();
+  $('d-gtrail').innerHTML = trail.slice(0, -1).map(([px, py], i, a) =>
+    `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${(2 + i * 0.25).toFixed(2)}" fill="#fff" opacity="${((i + 1) / (a.length + 1) * 0.55).toFixed(2)}"/>`).join('');
+
+  const total = Math.hypot(lat, lon);
+  const score = total / planned;
   const big = $('d-gnow');
-  big.textContent = fmtG(g);
-  big.className = 'gm-big ' + zone;
-  $('d-gplan').textContent = inCurve
-    ? `planerat ${fmtG(planned)}`
-    : (g < 0.03 ? `rakt fram · komfort ${fmtG(planned)}` : `komfort ${fmtG(planned)}`);
+  big.textContent = fmtG(total);
+  big.className = 'gm-big ' + (score <= 1 ? 'green' : score <= 1.5 ? 'yellow' : 'red');
+
+  const chip = $('d-gchip');
+  const [cls, label] = !moving ? ['', 'Står still']
+    : !c.lonSrc ? ['', 'Väntar på GPS']
+    : lonState(lon, coastG ?? 0, planned);
+  chip.className = 'gm-chip ' + cls;
+  chip.textContent = label;
+
+  $('d-glat').textContent = fmtG(Math.abs(lat));
+  $('d-glon').textContent = c.lonSrc ? fmtSignedG(lon) : '–';
+  $('d-gplan').textContent = inCurve ? `planerat ${fmtG(planned)}` : `komfort ${fmtG(planned)}`;
+}
+
+/** Gas, rullning eller broms ur längskraften (g) och rullningens inbromsning (g, negativ). */
+function lonState(lon, coastG, planned) {
+  if (lon > planned * 1.5) return ['red', 'Hård gas'];
+  if (lon > planned) return ['yellow', 'Rask gas'];
+  if (lon > Math.max(GPAD.gMin, coastG + GPAD.coastBand)) return ['green', 'Gasar'];
+  if (lon > coastG - GPAD.coastBand) return ['blue', 'Rullar'];
+  if (lon > -planned) return ['yellow', 'Bromsar'];
+  return ['red', 'Hård broms'];
+}
+
+const smoothstep = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+const GCOL = { green: [47, 179, 109], yellow: [242, 194, 48], red: [229, 72, 77], blue: [47, 128, 216] };
+
+/**
+ * Ritar fältets färger. Plattans koordinater är normerade (kanten = 200 %
+ * av planerat), så fältet ser likadant ut för alla nivåer; bara rullningens
+ * stråk flyttar sig. Ritas om när stråket flyttat sig märkbart eller storleken ändrats.
+ */
+function drawGField(coastN) {
+  const cv = $('d-gfield');
+  const n = Math.round(cv.clientWidth * Math.min(2, window.devicePixelRatio || 1));
+  if (!n) return;
+  const key = `${n}|${coastN == null ? '-' : Math.round(coastN * 200)}`;
+  if (drive.gfieldKey === key) return;
+  drive.gfieldKey = key;
+  cv.width = cv.height = n;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(n, n);
+  const d = img.data;
+  const { green: Gc, yellow: Y, red: R, blue: B } = GCOL;
+  const scale = 100 / GPAD.R; // pixlar utanför R är rött
+  const bandW = 0.07;
+  for (let py = 0; py < n; py++) {
+    const v = -(((py + 0.5) / n) * 2 - 1) * scale; // +1 = 200 % gas … −1 = 200 % broms (normerat)
+    for (let px = 0; px < n; px++) {
+      const u = (((px + 0.5) / n) * 2 - 1) * scale;
+      const sc = 2 * Math.hypot(u, v);
+      const t1 = smoothstep((sc - 0.85) / 0.55), t2 = smoothstep((sc - 1.45) / 0.5);
+      let r = Gc[0] + (Y[0] - Gc[0]) * t1, g = Gc[1] + (Y[1] - Gc[1]) * t1, b = Gc[2] + (Y[2] - Gc[2]) * t1;
+      r += (R[0] - r) * t2; g += (R[1] - g) * t2; b += (R[2] - b) * t2;
+      if (coastN != null) {
+        const w = 0.9 * Math.exp(-(((v - coastN) / bandW) ** 2)) * (1 - smoothstep(Math.abs(u) * 2 * 0.9));
+        r += (B[0] - r) * w; g += (B[1] - g) * w; b += (B[2] - b) * w;
+      }
+      const k = (py * n + px) * 4;
+      d[k] = r; d[k + 1] = g; d[k + 2] = b; d[k + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 const fmtG = g => `${g.toFixed(2).replace('.', ',')} g`;
+const fmtSignedG = g => `${g < -0.005 ? '−' : g > 0.005 ? '+' : ''}${Math.abs(g).toFixed(2).replace('.', ',')} g`;
 
 function trackCurves(view, obs) {
   if (!drive.tracker || view.mode === 'paused') return;
@@ -1046,6 +1165,7 @@ function onDriveObs(obs) {
       drive.log?.event(obs.t, 'gyroAxis', { axis: drive.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: drive.meter.axisR2 });
     }
   }
+  if (drive.meter) learnAccFromGps(drive.meter, prevObs, obs, drive.log, !plan.demo);
   const arrived = events.some(e => e.type === 'arrived');
   if (!arrived) trackCurves(view, obs);
   logDrive(view, obs, events);
@@ -1069,7 +1189,7 @@ function logDrive(view, obs, events) {
   const m = drive.meter ? drive.meter.current() : null;
   L.sample(obs.t, {
     s: view.s, lat: obs.lat, lon: obs.lon, kmh: (obs.speed ?? view.v ?? 0) * 3.6, acc: obs.accuracy,
-    mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, rel: view.distToRelease, alt: obs.alt,
+    mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, lonG: m?.lonG, rel: view.distToRelease, alt: obs.alt,
   });
   for (const ev of events) {
     const tg = ev.target;
@@ -1375,6 +1495,7 @@ async function startRecording() {
   rec.meter = new LateralMeter();
   const ga = store.gyroAxis;
   if (ga && ga.method === 'interval' && Array.isArray(ga.axis)) { rec.meter.axis = ga.axis; rec.meter.axisR2 = ga.r2; }
+  useAccAxis(rec.meter);
   rec.savedAt = Date.now();
   rec.stops.push(keepAwake());
   rec.stops.push(watchGps(onRecGps, e => toast(e.message, true)));
@@ -1399,6 +1520,7 @@ function onRecGps(o) {
     store.gyroAxis = { axis: rec.meter.axis, r2: rec.meter.axisR2, method: 'interval', date: new Date().toISOString() };
     rec.log.event(o.t, 'gyroAxis', { axis: rec.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: rec.meter.axisR2 });
   }
+  learnAccFromGps(rec.meter, rec.last, o, rec.log);
   rec.last = o;
   const m = rec.meter.current();
   rec.log.sample(o.t, { s: rec.dist, lat: o.lat, lon: o.lon, kmh: v * 3.6, acc: o.accuracy, mode: 'rec', g: m.g, side: m.side, alt: o.alt });

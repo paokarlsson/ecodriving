@@ -192,11 +192,25 @@
       </div>
     </div>
     <div class="drive-target" id="d-target"></div>
-    <div class="gmeter" id="d-gmeter" aria-label="Sidokraft">
-      <div class="gm-row"><span class="gm-big" id="d-gnow">0,00 g</span><span id="d-gplan">rakt fram</span></div>
-      <div class="gm-track" aria-hidden="true">
-        <span class="gm-center"></span>
-        <span class="gm-ball" id="d-gball"></span>
+    <div class="gmeter" id="d-gmeter">
+      <div class="gm-pad">
+        <canvas id="d-gfield" aria-hidden="true"></canvas>
+        <svg viewBox="0 0 200 200" aria-hidden="true">
+          <line x1="100" y1="14" x2="100" y2="186" class="gm-axis"/>
+          <line x1="14" y1="100" x2="186" y2="100" class="gm-axis"/>
+          <line id="d-gcoast" x1="70" x2="130" y1="100" y2="100" class="gm-coast"/>
+          <text x="100" y="11" text-anchor="middle">BROMS</text>
+          <text x="100" y="196" text-anchor="middle">GAS</text>
+          <g id="d-gtrail"></g>
+          <circle id="d-gball" cx="100" cy="100" r="9" class="gm-ball"/>
+        </svg>
+      </div>
+      <div class="gm-info" aria-live="off">
+        <span class="gm-big" id="d-gnow">0,00 g</span>
+        <span class="gm-chip" id="d-gchip">Står still</span>
+        <span class="gm-line">sida <b id="d-glat">0,00 g</b></span>
+        <span class="gm-line">längs <b id="d-glon">–</b></span>
+        <span class="gm-line" id="d-gplan"></span>
       </div>
     </div>
     <canvas id="d-map" class="map drive-map" aria-hidden="true"></canvas>

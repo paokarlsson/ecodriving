@@ -188,3 +188,53 @@ test('curveRadiusText: kartans radie och uppmätt radie', async () => {
   assert.equal(curveRadiusText({ radius: 60, radiusMeas: null, valid: true }), 'R 60 m');
   assert.equal(curveRadiusText({ radius: 300, radiusMeas: 5000, valid: true }), 'R 300 m');
 });
+
+test('gas och broms: accelerometerns framåtaxel lärs mot GPS-farten', () => {
+  // Telefonen lutad 60° bakåt och vriden 90° i hållaren: framåt är telefonens −x
+  const c = Math.cos(60 * DEGR), s = Math.sin(60 * DEGR);
+  const up = [0, s, c];                       // tyngdkraftens riktning (uppåt) i telefonens axlar
+  const fwdPhone = [-1, 0, 0];
+  const right = [0, c, -s];
+  const m = new LateralMeter();
+  let t = 0, v = 15;
+  const dtM = 0.02;
+  // Profil: gas, rullning, broms, kurvor emellan
+  const accAt = k => [1.2, -0.25, -1.8, 0.6, -0.3, -1.1, 0.9][Math.floor(k / 4) % 7];
+  for (let sec = 0; sec < 240; sec++) {
+    const a = accAt(sec);
+    const lat = Math.sin(sec / 7) * 2;        // sidokraft som inte ska förväxlas med fart
+    const v0 = v;
+    for (let i = 0; i < 50; i++) {
+      const l = [0, 1, 2].map(q => a * fwdPhone[q] + lat * right[q] + (Math.random() - 0.5) * 0.4);
+      const g = [0, 1, 2].map(q => 9.81 * up[q] + l[q]);
+      m.addMotion({ t, rot: { alpha: 0, beta: 0, gamma: 0 }, gx: g[0], gy: g[1], gz: g[2], ax: l[0], ay: l[1], az: l[2] });
+      t += dtM;
+      v = Math.max(3, v + a * dtM);
+    }
+    m.learnLon((v - v0) / 1);
+  }
+  assert.ok(m.fwd, 'framåtaxeln är inlärd');
+  assert.ok(m.fwdR2 > 0.8, `r2 ${m.fwdR2}`);
+  // Hård broms ger negativ längskraft ur accelerometern, även när GPS-värdet är gammalt
+  for (let i = 0; i < 100; i++) {
+    const l = fwdPhone.map(x => -2.5 * x);
+    const g = [0, 1, 2].map(q => 9.81 * up[q] + l[q]);
+    m.addMotion({ t, rot: { alpha: 0, beta: 0, gamma: 0 }, gx: g[0], gy: g[1], gz: g[2], ax: l[0], ay: l[1], az: l[2] });
+    t += dtM;
+  }
+  const cur = m.current();
+  assert.equal(cur.lonSrc, 'acc');
+  assert.ok(Math.abs(cur.lonG - (-2.5 / G)) < 0.03, `lonG ${cur.lonG}`);
+});
+
+test('gas och broms: GPS-farten som reserv innan axeln är inlärd', () => {
+  const m = new LateralMeter();
+  assert.equal(m.current().lonSrc, null);
+  m.learnLon(-1.5);
+  m.learnLon(-1.5);
+  const cur = m.current();
+  assert.equal(cur.lonSrc, 'gps');
+  assert.ok(Math.abs(cur.lonG + 1.5 / G) < 0.01);
+  m.learnLon(null);
+  assert.equal(m.current().lonSrc, null);
+});
