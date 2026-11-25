@@ -29,11 +29,10 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 - Medan man skriver (från 3 tecken, efter en kort paus) används `autocomplete`, som klarar början av ord. Sök-knappen gör en vanlig sökning med upp till 10 träffar.
 - Varje träff visar typ (adress, ort, plats …) och avstånd fågelvägen från din position.
 
-## Kurvor och släpvagn
+## Kurvor
 
 - **Kurvradien** räknas hörn för hörn i ruttens linje: varje hörn får den största båge som ryms i linjens geometri (avviker högst 5 m från hörnet och får plats på halva sträckorna till grannhörnen). Glest ritade hörn blir då mjuka kurvor som på den verkliga vägen, tätt ritade kurvor får sin riktiga radie och tvära korsningar förblir skarpa. Kurvor med mindre än 150 m emellan slås ihop.
 - **Rekommenderad kurvfart** räknas ur kurvradien och vald sidokraft (standard 0,25 g; 1 g = 9,81 m/s²). Över 50 km/h sänks sidokraften gradvis till 65 % vid 110 km/h.
-- **Släpvagnsläge** (bockruta på hemskärmen, i ruttöversikten eller i Inställningar): skyltad gräns men högst 80 km/h. Sidokraft, rullmodell och inlärning är desamma som utan släp.
 
 ## Uppmätt kurvkraft (gyro)
 
@@ -47,7 +46,9 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 Varje rullning efter en släpp-signal blir ett litet rullprov. Appen hittar rullningen i GPS-farten, klipper bort början (foten lämnar gasen), slutet och allt efter gas (farten ökar) eller broms (inbromsning 0,8 m/s² mer än modellen två sekunder i rad, eller en ihållande stöt i accelerometern). Inbromsningen korrigeras för backen med ruttens höjddata.
 
-Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Rullningar som bromsar mycket mer än modellen sorteras bort (broms). Rullningar som är lättare än väntat godkänns, eftersom bilar som frikopplar när gasen släpps rullar så; bara en rullning som inte tappar någon fart på plan väg (lutningen borträknad) sorteras bort, eftersom den betyder gas eller fel höjddata. Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Av/på och återställning under Inställningar → Kalibrering.
+Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med rullprovet: rullprovet väger från början som ca 7 rullningar och en rullning som högst 3 mätpunkter, så modellen ändras gradvis. Nyare rullningar väger mer: för varje ny rullning väger alla tidigare 7 % mindre (halveras efter ca 10 rullningar), och rullprovet tappar vikt på samma sätt men aldrig under 15 % av sin fulla vikt. Då följer modellen däckbyten, årstider och last. Rullningar som bromsar mycket mer än modellen sorteras bort (broms). Rullningar som är lättare än väntat godkänns, eftersom bilar som frikopplar när gasen släpps rullar så; bara en rullning som inte tappar någon fart på plan väg (lutningen borträknad) sorteras bort, eftersom den betyder gas eller fel höjddata. Rullningar som inte börjar vid en släpp-signal loggas men räknas inte, eftersom en halv gaslättning annars skulle se ut som en lätt rullning. Av/på och återställning under Inställningar → Kalibrering.
+
+**Under rullningen** jämförs bilens faktiska inbromsning (backen borträknad) med modellen. Efter 3 s rullning börjar avvikelsen läggas på A, gradvis tills hela avvikelsen gäller efter 8 s (högst −0,25 till +0,4 m/s²). Den justerade modellen styr bromsvarningen (”broms kan behövas” när farten ligger mer än ca 4 km/h över rullkurvan) och fartkurvan, som då visar ”rullkurva · justerad”. Justeringen gäller bara den pågående rullningen; när den tar slut gäller den sparade modellen igen och rullningen lärs in som vanligt. Loggen får händelsen `liveCoast` och fältet `coastAdj` i varje prov.
 
 ## Körlogg (JSON)
 
@@ -56,7 +57,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 - **Kopiera för analys**: kompakt JSON, en mätpunkt var 5:e sekund och alla händelser (ca 40 kB per timme), att klistra in i en chatt.
 - **Spara fil / Dela**: samma sak med alla mätpunkter (en per sekund).
 
-Innehåll: `kind` (`drive` | `calibration`), `dest`, `trailer`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
+Innehåll: `kind` (`drive` | `calibration`), `dest`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
 `samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
@@ -102,7 +103,6 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/logbook.js` | Körlogg som JSON och lagring av de senaste loggarna |
 | `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
-| `js/trailer.js` | Släpvagnsläge: högst 80 km/h |
 | `js/demo.js`, `js/sim.js` | Testbana och simulerade bilar |
 
 ## Publicering

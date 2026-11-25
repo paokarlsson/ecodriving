@@ -128,3 +128,51 @@ test('dålig GPS och korta rullningar ger inget', () => {
   assert.equal(seg.ok, false);
   assert.ok(COAST.minDur > seg.dur);
 });
+
+test('nyare rullningar väger mer: modellen följer en bil som ändrats (t.ex. vinterdäck)', () => {
+  const prior = { A: 0.24, C: 0.0003 };
+  const stats = new CoastStats();
+  const rand = rng(11);
+  const at80 = mm => mm.A + mm.C * (80 / 3.6) ** 2;
+  // 40 rullningar med den sanna bilen …
+  for (let k = 0; k < 40; k++) {
+    const L = new CoastLearner(prior);
+    for (const s of drive(L, rand, { from: 80 + (k % 3) * 10, to: 45 + (k % 4) * 5 })) stats.add(s.points);
+  }
+  const before = at80(stats.fit(prior));
+  // … sedan rullar den tyngre (+0,12 m/s²). Efter 20 rullningar ska modellen ha följt med det mesta.
+  const heavier = { A: TRUE.A + 0.12, C: TRUE.C };
+  for (let k = 0; k < 20; k++) {
+    const pts = [];
+    for (let v = 85 / 3.6; v > 50 / 3.6; v -= 1) pts.push({ v, a: heavier.A + heavier.C * v * v + (rand() - 0.5) * 0.02 });
+    stats.add(pts);
+  }
+  const after = at80(stats.fit(prior));
+  const moved = (after - before) / (at80(heavier) - before);
+  assert.ok(moved > 0.6, `följde ${Math.round(moved * 100)} %`);
+});
+
+test('under rullningen: avvikelsen mot modellen mäts och vägs in gradvis', () => {
+  const model = { A: 0.2, C: 0.0003 };
+  const real = { A: 0.35, C: 0.0003 }; // bilen bromsar mer än modellen (t.ex. motvind)
+  const L = new CoastLearner(model);
+  let t = 0, v = 90 / 3.6;
+  const gps = () => L.addGps({ t, v, grade: 0.01, acc: 5, ok: true });
+  for (let i = 0; i < 4; i++) { t += 1; gps(); }
+  assert.equal(L.live(model), null, 'ingen rullning ännu');
+  const seen = [];
+  for (let i = 0; i < 14; i++) {
+    t += 1;
+    v -= real.A + real.C * v * v + G * 0.01;
+    gps();
+    seen.push(L.live(model));
+  }
+  assert.ok(seen.slice(0, 3).every(x => x == null), 'inget de första sekunderna');
+  const last = seen[seen.length - 1];
+  assert.ok(last && Math.abs(last.dA - (real.A - model.A)) < 0.03, `dA ${last?.dA}`);
+  const firstLive = seen.find(x => x);
+  assert.ok(firstLive.dA < last.dA, 'vägs in gradvis');
+  // Gas: rullningen tar slut och justeringen försvinner
+  t += 1; v += 2; gps(); t += 1; v += 2; gps();
+  assert.equal(L.live(model), null);
+});

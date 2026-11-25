@@ -168,11 +168,11 @@ export function drawSpeedGraph(canvas, d) {
   g.restore();
   // Teckenförklaring uppe till höger, på egen bakgrund så att linjerna inte syns igenom
   g.textAlign = 'right'; g.textBaseline = 'middle';
-  const legW = g.measureText('din fart').width + g.measureText('rullkurva').width + 5 * 2 + 14 * 2 + 24 + 8;
+  const legW = g.measureText('din fart').width + g.measureText(d.adjusted ? 'rullkurva · justerad' : 'rullkurva').width + 5 * 2 + 14 * 2 + 24 + 8;
   g.fillStyle = css('--surface', '#fff');
   g.fillRect(w - R - legW, T - 2, legW + 2, 16);
   let lx = w - R - 2;
-  for (const [txt, col] of [['din fart', fg], ['rullkurva', blue]]) {
+  for (const [txt, col] of [['din fart', fg], [d.adjusted ? 'rullkurva · justerad' : 'rullkurva', blue]]) {
     g.fillStyle = muted; g.fillText(txt, lx, T + 6);
     lx -= g.measureText(txt).width + 5;
     g.strokeStyle = col; g.lineWidth = 2.5;

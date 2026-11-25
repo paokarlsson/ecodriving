@@ -22,7 +22,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   aLat: 2.45,          // sidokraft i kurvor (m/s²), 0,25 g
   giveWayKmh: 20,
   roundaboutKmh: 25,
-  trailer: false,      // släpvagnsläge: högst 80 km/h
   learnCoast: true,       // förfina rullmodellen av rullningar under körning
 });
 
