@@ -23,6 +23,7 @@ const safeStorage = {
 const logStore = makeLogStore(safeStorage, { onRemove: id => deleteRaw(id) });
 import { SimCar } from './sim.js';
 import { drawOverview, drawDrive, KIND_COLOR } from './mapview.js';
+import { GRAPH, coastProfile, releaseOnProfile, drawSpeedGraph } from './speedgraph.js';
 import { unlockAudio, sounds, speak } from './audio.js';
 import {
   isIOS, needsMotionPermission, requestMotionPermission, requestLocationOnce, startPosition, locationGranted,
@@ -771,6 +772,7 @@ function startDrive() {
   if (needsMotionPermission()) requestMotionPermission();
   const s = store.settings;
   drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: s.marginS });
+  resetSpeedGraph();
   drive.coastStart = null;
   drive.rerouting = false;
   drive.meter = new LateralMeter();
@@ -1157,6 +1159,7 @@ function onDriveObs(obs) {
   drive.lastObs = obs;
   if (!plan.demo) drive.raw?.addGps(obs);
   const { view, events } = drive.engine.update(obs);
+  recordSpeed(view, obs);
   if (!plan.demo && drive.meter) {
     const onRoute = !view.paused && view.mode !== 'paused';
     const rt = onRoute && prevObs ? routeTurnBetween(plan.route, prevS, drive.engine.s) : null;
@@ -1255,6 +1258,7 @@ async function reroute(obs) {
       apiRoute: { from: { lat: obs.lat, lon: obs.lon }, to: { lat: plan.dest.lat, lon: plan.dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
     recordApi();
     drive.engine = new DriveEngine(plan.route, plan.targets, model(), { marginS: store.settings.marginS });
+    resetSpeedGraph();
     drive.engine.stats = stats;
     drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
     drive.log?.event(obs.t, 'reroute', { lat: obs.lat, lon: obs.lon, route: routeMeta(plan) });
@@ -1278,6 +1282,7 @@ function setRing(mode, main, sub, progress) {
 }
 
 function renderDrive(view, obs = null) {
+  drive.lastView = view;
   $('d-speed').textContent = kmh(view.v || 0);
   $('d-remaining').textContent = view.remaining != null ? fmtDist(view.remaining) + ' kvar' : '';
   let target = '';
@@ -1309,11 +1314,74 @@ function renderDrive(view, obs = null) {
   renderSigns(view);
   if (plan) {
     const s = view.s || 0;
-    const moving = (view.v || 0) > 3;
-    const heading = moving || drive.compass == null ? smoothHeading(plan.route, s) : drive.compass;
-    drawDrive($('d-map'), plan.route, plan.targets, s, heading, { limits: plan.limits, curves: plan.curves });
+    const graph = speedGraphData(view);
+    $('d-graph').hidden = !graph;
+    $('d-map').hidden = !!graph;
+    if (graph) drawSpeedGraph($('d-graph'), graph);
+    else {
+      const moving = (view.v || 0) > 3;
+      const heading = moving || drive.compass == null ? smoothHeading(plan.route, s) : drive.compass;
+      drawDrive($('d-map'), plan.route, plan.targets, s, heading, { limits: plan.limits, curves: plan.curves });
+    }
   }
 }
+
+// ---------- Fartkurva ----------
+function resetSpeedGraph() {
+  drive.speedHist = [];
+  drive.graph = { key: null, profile: null, release: null };
+}
+
+/** Förarens fart längs rutten, för den svarta linjen i grafen. */
+function recordSpeed(view, obs) {
+  const h = drive.speedHist || (drive.speedHist = []);
+  if (view.mode === 'paused' || view.paused || view.s == null) return;
+  const v = obs.speed ?? view.v;
+  if (v == null || !Number.isFinite(v)) return;
+  const last = h[h.length - 1];
+  if (last && view.s < last[0] - 30) h.length = 0; // ny rutt eller hopp bakåt
+  if (last && Math.abs(view.s - last[0]) < 0.5) last[1] = v;
+  else h.push([view.s, v]);
+  while (h.length && h[0][0] < view.s - GRAPH.histKeep) h.shift();
+}
+
+/**
+ * Grafens data när den ska visas: ett mål närmar sig (släpp om … eller
+ * rullar), inom GRAPH.maxAhead, och föraren har inte valt kartan.
+ */
+function speedGraphData(view) {
+  if (store.driveGraph === false) return null;
+  if (view.mode !== 'approach' && view.mode !== 'coasting') return null;
+  const target = view.target;
+  const s = view.s || 0, v = view.v || 0;
+  if (!target || target.s - s > GRAPH.maxAhead || target.s < s) return null;
+  const m = drive.engine?.model || model();
+  const gr = drive.graph || (drive.graph = { key: null, profile: null, release: null });
+  const key = `${target.id ?? target.s}|${target.v}|${m.A}|${m.C}`;
+  if (gr.key !== key) {
+    const grade = plan.route.hasEle ? x => gradeAt(plan.route, x) : () => 0;
+    gr.profile = coastProfile(target, Math.max(0, target.s - GRAPH.maxAhead - GRAPH.behind - 100), grade, m);
+    gr.key = key;
+  }
+  // Släpp-punkten följer farten fram till släppet och ligger sedan still
+  const id = target.id ?? target.s;
+  if (view.mode === 'approach') {
+    const r = releaseOnProfile(gr.profile, v);
+    gr.release = { id, s: r };
+  } else if (!gr.release || gr.release.id !== id || gr.release.s == null) {
+    gr.release = { id, s };
+  }
+  return { s, v, hist: drive.speedHist || [], target, profile: gr.profile, releaseS: gr.release.s };
+}
+
+/** Ett tryck växlar mellan fartkurva och karta; valet sparas. */
+function toggleDriveGraph() {
+  store.driveGraph = store.driveGraph === false;
+  toast(store.driveGraph ? 'Fartkurvan visas när ett mål närmar sig.' : 'Kartan visas hela tiden. Tryck på kartan för fartkurvan.');
+  if (drive.engine && drive.lastView) renderDrive(drive.lastView, drive.lastObs);
+}
+$('d-graph').addEventListener('click', toggleDriveGraph);
+$('d-map').addEventListener('click', toggleDriveGraph);
 
 /** Hastighetsgräns och rekommenderad kurvfart vid bilens läge. */
 function renderSigns(view) {

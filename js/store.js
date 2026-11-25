@@ -43,6 +43,9 @@ export const store = {
   get gyroAxis() { return get('gyroAxis'); },
   set gyroAxis(v) { set('gyroAxis', v); },
   /** Inlärd framåtaxel för accelerometern (gas/broms) {axis: [x, y, z], r2, date}. */
+  /** Fartkurvan i stället för kartan nära ett mål (false = alltid karta). */
+  get driveGraph() { return get('driveGraph', true); },
+  set driveGraph(v) { set('driveGraph', v); },
   get accAxis() { return get('accAxis'); },
   set accAxis(v) { set('accAxis', v); },
   /** Inlärda rullningar: {car: CoastStats-JSON}. */

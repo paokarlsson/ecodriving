@@ -208,7 +208,7 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .sign-curve small { font-size: 0.62rem; font-weight: 700; white-space: nowrap; }
 .ring-wrap {
   --c: var(--free);
-  position: relative; width: min(78vw, 46vh, 380px); aspect-ratio: 1; margin: 10px auto 4px;
+  position: relative; width: min(72vw, 38vh, 360px); aspect-ratio: 1; margin: 8px auto 2px;
 }
 .ring-wrap[data-mode="approach"] { --c: var(--approach); }
 .ring-wrap[data-mode="coasting"] { --c: var(--release); }
@@ -223,7 +223,7 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .ring-sub { font-size: clamp(1rem, 4.5vw, 1.3rem); font-weight: 600; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
 .drive-target { text-align: center; font-weight: 600; min-height: 1.6em; padding: 0 16px; }
 .drive-map { height: auto; flex: 1; min-height: 140px; margin: 8px 16px 0; width: calc(100% - 32px); }
-.drive-actions { padding-top: 8px; }
+.drive-actions { padding-top: 8px; padding-bottom: 12px; }
 
 /* G-plattan: kvadratisk, bollen dit kraften trycker föraren (broms upp, gas ner).
    Färgfältet ritas i canvas (app.js drawGField), axlar och boll i SVG ovanpå. */
