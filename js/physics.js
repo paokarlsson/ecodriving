@@ -4,7 +4,11 @@
 export const G = 9.81;
 
 /** Typvärden för en personbil i växel, används tills bilen är kalibrerad. */
-export const DEFAULT_MODEL = Object.freeze({ A: 0.45, C: 0.00040 });
+// Typvärden från en verklig bil (körlogg 2026-11-24, rullningar efter
+// släpp-signal 95→72 och 80→69 km/h, korrigerade för ruttens lutning):
+// ca 0,20–0,29 m/s² på plan väg. C är låst till ett typiskt luftmotstånd,
+// eftersom farterna var för lika för att skilja A från C.
+export const DEFAULT_MODEL = Object.freeze({ A: 0.15, C: 0.00025 });
 
 export function decel(v, grade, model) {
   return model.A + model.C * v * v + G * grade;

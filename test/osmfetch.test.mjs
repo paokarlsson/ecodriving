@@ -165,3 +165,21 @@ test('början av rutten blir klar först, resten fortsätter', async () => {
   await fetchOsmAlongRoute(r, { fetchImpl: ok.fetchImpl, cache, waits: [0], onReady: () => { called = true; } });
   assert.equal(called, false);
 });
+
+test('hänger alla servrar går det att starta efter tidsgränsen, med det som finns', async () => {
+  const { coords } = demoData();
+  const r = buildRoute(coords);
+  const fetchImpl = (url, opts) => new Promise((_, reject) =>
+    opts.signal.addEventListener('abort', () => reject(new DOMException('a', 'AbortError'))));
+  let ready = null;
+  const t0 = Date.now();
+  const full = fetchOsmAlongRoute(r, {
+    fetchImpl, readyTimeoutMs: 50, hedgeMs: 20, timeoutMs: 150, waits: [0],
+    onReady: part => { ready = { part, ms: Date.now() - t0 }; },
+  });
+  await assert.rejects(full);
+  assert.ok(ready, 'onReady anropades');
+  assert.ok(ready.ms < 140, `${ready.ms} ms`);
+  assert.equal(ready.part.stats.readyTimeout, true);
+  assert.equal(ready.part.length, 0);
+});

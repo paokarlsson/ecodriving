@@ -68,12 +68,19 @@ test('accelerometerns stöt räknas som broms', () => {
   assert.equal(cut.end, 'broms');
 });
 
-test('rullning i friläge sorteras bort', () => {
+test('rullning som är lättare än modellen (frikopplande bil) godkänns', () => {
   const L = new CoastLearner(TRUE);
   const [seg] = drive(L, rng(3), { kind: 'neutral' });
   const v = acceptSegment(seg, TRUE);
+  assert.equal(v.ok, true, v.reason);
+  assert.ok(v.resid < 0);
+});
+
+test('rullning utan fartförlust på plan väg (gas eller fel höjd) sorteras bort', () => {
+  const seg = { ok: true, points: [{ v: 22, a: -0.2 }, { v: 21.8, a: -0.15 }, { v: 21.6, a: -0.18 }] };
+  const v = acceptSegment(seg, TRUE);
   assert.equal(v.ok, false);
-  assert.match(v.reason, /friläge/);
+  assert.match(v.reason, /plan väg/);
 });
 
 test('modellen närmar sig den sanna efter många rullningar i olika backar', () => {
