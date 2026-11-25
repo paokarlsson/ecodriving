@@ -102,6 +102,7 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   padding: 14px 16px; margin: 12px 0;
 }
 .card p { margin: 0 0 10px; }
+.card.install { border-color: var(--accent, #2f855a); }
 .card p:last-child { margin-bottom: 0; }
 .card.warn { background: var(--warn-bg); border-color: var(--warn-line); }
 .card .btn + .btn { margin-left: 6px; }

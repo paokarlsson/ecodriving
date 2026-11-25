@@ -17,7 +17,7 @@ Webbapp som säger till när du ska släppa gasen, så att bilen rullar ner till
 
 ## Kom igång
 
-- Öppna sidan i Chrome (Android) eller Safari (iPhone) och välj *Lägg till på hemskärmen*.
+- Öppna sidan i Chrome (Android) eller Safari (iPhone) och installera den. På Android och i Chrome/Edge på datorn visar startsidan en knapp *Installera*; på iPhone visar den hur man väljer *Dela → Lägg till på hemskärmen*. Samma ruta finns under Inställningar så länge appen inte är installerad. Installerad startar appen i helskärm och öppnas utan täckning.
 - Skapa en gratis nyckel på [account.heigit.org](https://account.heigit.org) och klistra in den i appen. Nyckeln sparas bara i telefonens webbläsare (`localStorage`) och skickas bara till `api.heigit.org`.
 - **Dela med vänner:** en länk med nyckeln som parameter, `https://<användare>.github.io/<repo>/?key=DIN_NYCKEL` (eller `#key=…`), sparar nyckeln i mottagarens telefon och tas sedan bort ur adressfältet. Knappen *Dela appen med nyckeln* under Inställningar skapar länken. Alla som använder länken delar på nyckelns dagskvot.
 - Gör ett **rullprov** (Inställningar → Kalibrering): i växel, ca 80 → 30 km/h på rak, plan väg, en gång i varje riktning.
