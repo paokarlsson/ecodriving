@@ -389,8 +389,8 @@ window.addEventListener('appinstalled', () => {
 });
 
 const INSTALL_TEXT = {
-  prompt: 'Installera appen på hemskärmen. Den startar då i helskärm, utan adressfält, och öppnas utan täckning.',
-  ios: 'Installera på iPhone: tryck på Dela-knappen (fyrkanten med pil uppåt) och välj "Lägg till på hemskärmen". Appen startar då i helskärm och öppnas utan täckning.',
+  prompt: 'Installera appen på hemskärmen.',
+  ios: 'Installera: Dela → Lägg till på hemskärmen.',
 };
 function installState() {
   if (isStandalone()) return null;
