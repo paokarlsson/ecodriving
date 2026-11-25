@@ -1,6 +1,6 @@
 // Service worker: appens egna filer cachas så att den startar utan täckning.
 // API-anrop (rutt, höjd, Overpass) går alltid direkt mot nätet.
-const VERSION = 'bromsfri-v32';
+const VERSION = 'bromsfri-v33';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/app.js', 'js/api.js', 'js/audio.js', 'js/calibration.js', 'js/demo.js', 'js/drive.js',
@@ -9,7 +9,10 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // Förbi webbläsarens HTTP-cache, annars kan en blandning av gamla och nya filer hamna i cachen
+  e.waitUntil(caches.open(VERSION)
+    .then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -19,11 +22,14 @@ self.addEventListener('activate', e => {
 });
 
 // Nätet först för egna filer (så uppdateringar syns direkt), cache som reserv.
+// GitHub Pages låter webbläsaren spara filer i 10 minuter. Utan 'no-cache'
+// kan sidan då få ny index.html men gammal app.css eller app.js. Med
+// 'no-cache' frågas servern varje gång (oförändrade filer ger bara 304).
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' })
       .then(res => {
         const copy = res.clone();
         caches.open(VERSION).then(c => c.put(e.request, copy));
