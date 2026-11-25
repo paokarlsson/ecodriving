@@ -375,6 +375,51 @@ function computeTargets(p) {
   return { ...p, limits, targets, curves, trailer: !!s.trailer };
 }
 
+// ---------- Installera som app ----------
+// Chrome/Edge (Android och dator) ger ett installationsanrop via
+// beforeinstallprompt; Safari på iPhone har inget sådant, där visas hur man
+// lägger till appen på hemskärmen. Inget visas när appen redan körs installerad.
+const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; renderInstall(); });
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  renderInstall();
+  toast('Appen är installerad. Öppna den från hemskärmen.');
+});
+
+const INSTALL_TEXT = {
+  prompt: 'Installera appen på hemskärmen.',
+  ios: 'Installera: Dela → Lägg till på hemskärmen.',
+};
+function installState() {
+  if (isStandalone()) return null;
+  if (installPrompt) return 'prompt';
+  if (isIOS) return 'ios';
+  return null;
+}
+function renderInstall() {
+  const st = installState();
+  const snoozed = Date.now() - (store.installDismissed || 0) < 14 * 86400 * 1000;
+  $('install-card').hidden = !st || snoozed;
+  $('set-install').hidden = !st;
+  for (const [text, btn] of [['install-text', 'install-btn'], ['set-install-text', 'set-install-btn']]) {
+    if (st) $(text).textContent = INSTALL_TEXT[st];
+    $(btn).hidden = st !== 'prompt';
+  }
+}
+async function doInstall() {
+  const p = installPrompt;
+  if (!p) return;
+  installPrompt = null;   // ett anrop kan bara visas en gång
+  p.prompt();
+  try { await p.userChoice; } catch { /* avbrutet */ }
+  renderInstall();
+}
+$('install-btn').addEventListener('click', doInstall);
+$('set-install-btn').addEventListener('click', doInstall);
+$('install-later').addEventListener('click', () => { store.installDismissed = Date.now(); renderInstall(); });
+
 function enterHome() {
   const c = store.calibration;
   const tr = trailerOn();
@@ -389,6 +434,7 @@ function enterHome() {
   $('home-nokey').hidden = !!store.key;
   $('search-form').hidden = !store.key;
   renderFavorites();
+  renderInstall();
 }
 
 function setTrailer(on) {
@@ -1266,6 +1312,7 @@ $('sum-done').addEventListener('click', () => { stack.length = 0; show('home'); 
 
 // ---------- Inställningar ----------
 function enterSettings() {
+  renderInstall();
   const k = store.key;
   $('set-key-show').textContent = k ? `Nyckel: ${maskKey(k)}` : 'Ingen nyckel – rutter fungerar inte.';
   $('set-share').hidden = !k;

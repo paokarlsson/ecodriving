@@ -49,6 +49,8 @@ export const store = {
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },
   set onboarded(v) { set('onboarded', v); },
+  get installDismissed() { return get('installDismissed', 0); },
+  set installDismissed(v) { set('installDismissed', v); },
   get safetyAck() { return get('safetyAck', false); },
   set safetyAck(v) { set('safetyAck', v); },
   get keySkipped() { return get('keySkipped', false); },

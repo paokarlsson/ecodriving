@@ -3,6 +3,7 @@
   "short_name": "Bromsfri",
   "description": "Säger till när gasen ska släppas så att bilen rullar ner till rätt fart utan broms.",
   "lang": "sv",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

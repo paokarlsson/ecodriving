@@ -124,6 +124,13 @@
         <input id="search-input" type="search" placeholder="Sök adress eller plats" enterkeyhint="search">
         <button class="btn primary small" type="submit">Sök</button>
       </form>
+      <div id="install-card" class="card install" hidden>
+        <p id="install-text"></p>
+        <div class="row">
+          <button class="btn small primary" id="install-btn" hidden>Installera</button>
+          <button class="btn small ghost" id="install-later">Inte nu</button>
+        </div>
+      </div>
       <div id="home-nokey" class="card" hidden>
         <p>Rutter kräver en OpenRouteService-nyckel.</p>
         <button class="btn small" id="home-addkey">Lägg till nyckel</button>
@@ -217,6 +224,10 @@
   <section class="screen" id="settings" hidden>
     <header class="bar"><button class="icon-btn back" data-back aria-label="Tillbaka">‹</button><h1>Inställningar</h1></header>
     <div class="content">
+      <div id="set-install" class="card" hidden>
+        <p id="set-install-text"></p>
+        <button class="btn small primary" id="set-install-btn" hidden>Installera appen</button>
+      </div>
       <h2 class="section-title">API-nyckel</h2>
       <div class="card">
         <p id="set-key-show">Ingen nyckel</p>
