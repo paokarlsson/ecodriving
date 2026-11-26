@@ -63,23 +63,31 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   max-width: 560px;
   margin: 0 auto;
 }
-.content { flex: 1; padding: 12px 16px 16px; }
+.content { flex: 1; padding: 8px 16px 10px; }
 .actions {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 12px 16px 20px;
-  position: sticky; bottom: 0;
-  background: linear-gradient(to top, var(--bg) 75%, transparent);
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 8px 16px 14px;
 }
 .bar {
   display: flex; align-items: center; gap: 8px;
-  padding: 14px 16px 6px;
+  padding: 10px 16px 2px;
 }
-.bar h1 { flex: 1; }
+.bar h1 { flex: 1; font-size: 1.2rem; line-height: 1.2; }
+
+/* Vyer som ska rymmas på en skärm utan skroll (dimensionerat för 360×670,
+   t.ex. Galaxy S20 i Chrome). Blir det ändå för trångt skrollar bara texten,
+   knapparna ligger kvar längst ner. */
+#welcome, #key, #calib, #overview, #drive, #summary, #record {
+  height: 100dvh; min-height: 0; overflow: hidden;
+}
+#welcome .content, #key .content, #calib .content, #overview .content, #summary .content, #record .content {
+  overflow-y: auto; min-height: 0;
+}
 
 .btn {
   appearance: none; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
-  font: inherit; font-weight: 600; padding: 14px 18px; border-radius: var(--radius);
-  cursor: pointer; min-height: 52px; text-align: center;
+  font: inherit; font-weight: 600; padding: 11px 16px; border-radius: var(--radius);
+  cursor: pointer; min-height: 48px; text-align: center;
 }
 .btn:active { transform: scale(0.99); }
 .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
@@ -95,11 +103,13 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .icon-btn.back { font-size: 2.2rem; margin-left: -10px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.logo { width: 84px; height: 84px; color: var(--accent); margin: 28px 0 12px; }
-.lead { font-size: 1.1rem; }
+.logo { width: 56px; height: 56px; color: var(--accent); margin: 14px 0 6px; }
+#welcome h1 { font-size: 1.5rem; }
+.lead { font-size: 1rem; margin: 8px 0; }
+#welcome .card.warn p { font-size: .95rem; margin-bottom: 6px; }
 .card {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 14px 16px; margin: 12px 0;
+  padding: 12px 14px; margin: 10px 0;
 }
 .card p { margin: 0 0 10px; }
 .card.install { border-color: var(--accent, #2f855a); }
@@ -107,7 +117,7 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .card.warn { background: var(--warn-bg); border-color: var(--warn-line); }
 .card .btn + .btn { margin-left: 6px; }
 .steps { padding-left: 1.3em; }
-.steps li { margin: 8px 0; }
+.steps li { margin: 4px 0; }
 .hint { color: var(--muted); font-size: 0.92rem; }
 .section-title { margin-top: 22px; color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
 
@@ -162,13 +172,23 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
   width: 100%; height: 300px; display: block;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
 }
-.ov-summary { display: flex; gap: 18px; margin: 14px 0 6px; font-size: 1.05rem; }
+.ov-summary { display: flex; gap: 18px; margin: 8px 0 2px; font-size: 1.05rem; }
+/* Kartan tar det som blir över, knapparna bredvid varandra */
+#overview .content { display: flex; flex-direction: column; padding-bottom: 0; }
+#overview .map { flex: 1; height: auto; min-height: 150px; }
+#overview .hint { font-size: .82rem; margin: 2px 0; line-height: 1.35; }
+#overview .legend { font-size: .88rem; gap: 2px 12px; margin: 4px 0; }
+#overview .actions { flex-direction: row; }
+#overview .actions .btn { flex: 1; }
+#overview .actions .btn.ghost { flex: 0 0 auto; }
 .ov-summary b { font-size: 1.4rem; }
 .legend { list-style: none; padding: 0; margin: 8px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
 .legend li { display: flex; align-items: center; gap: 8px; }
 .legend i { width: 12px; height: 12px; border-radius: 6px; display: inline-block; flex: none; }
 
 /* Kalibrering */
+#calib .content { font-size: .95rem; }
+#calib-intro > p { margin: 4px 0; }
 .live { text-align: center; padding: 20px 0; }
 .run-label { color: var(--muted); font-weight: 600; }
 .big-speed { font-size: 5.5rem; font-weight: 800; line-height: 1; margin: 16px 0 8px; font-variant-numeric: tabular-nums; }
@@ -178,65 +198,85 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .calib-state.bad { color: var(--danger); }
 .result-line { font-size: 1.25rem; font-weight: 700; }
 
-/* Körning */
-.screen.drive { padding-left: 0; padding-right: 0; }
-.drive-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 0; }
-.speed-now { font-size: 2.6rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+/* Körning: allt på en skärm. Nedräkningen är ringen, g-plattan en skiva inuti,
+   texten brickor på ringen och fartkurvan tar resten av höjden. */
+.screen.drive { padding-left: 0; padding-right: 0; position: relative; }
+.drive-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 12px 0; }
+.speed-now { font-size: 2.3rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; transition: color 0.2s; }
 .speed-now small { font-size: 1rem; color: var(--muted); font-weight: 600; margin-left: 4px; }
-.drive-remaining { color: var(--muted); font-weight: 600; font-size: 0.9rem; margin-top: 4px; }
-.speed-now { transition: color 0.2s; }
 .speed-now.over { color: var(--danger); }
-.signs { display: flex; gap: 10px; align-items: center; }
+.drive-remaining { color: var(--muted); font-weight: 600; font-size: 0.9rem; margin-top: 4px; }
+.signs { display: flex; gap: 8px; align-items: center; }
 .sign-limit {
-  width: 58px; height: 58px; border-radius: 50%; background: #fff; color: #111;
-  border: 7px solid #d0021b; display: flex; align-items: center; justify-content: center;
-  font-weight: 800; font-size: 1.3rem; font-variant-numeric: tabular-nums; box-sizing: border-box;
+  width: 50px; height: 50px; border-radius: 50%; background: #fff; color: #111;
+  border: 6px solid #d0021b; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 1.15rem; font-variant-numeric: tabular-nums; box-sizing: border-box;
 }
 .sign-curve {
-  min-width: 58px; height: 58px; border-radius: 10px; background: #f7c600; color: #111;
+  min-width: 50px; height: 50px; border-radius: 10px; background: #f7c600; color: #111;
   border: 2px solid #111; display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 2px 6px; line-height: 1;
 }
-.sign-curve svg { width: 18px; height: 18px; }
+.sign-curve svg { width: 16px; height: 16px; }
 .sign-curve.left svg { transform: scaleX(-1); }
-.sign-curve b { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
-.sign-curve small { font-size: 0.62rem; font-weight: 700; white-space: nowrap; }
+.sign-curve b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.sign-curve small { font-size: 0.6rem; font-weight: 700; white-space: nowrap; }
+#d-sound { width: 40px; height: 40px; font-size: 1.4rem; }
+
 .ring-wrap {
   --c: var(--free);
-  position: relative; width: min(72vw, 38vh, 360px); aspect-ratio: 1; margin: 8px auto 2px;
+  position: relative; width: min(78vw, 40vh, 300px); aspect-ratio: 1; margin: 18px auto 14px;
 }
 .ring-wrap[data-mode="approach"] { --c: var(--approach); }
 .ring-wrap[data-mode="coasting"] { --c: var(--release); }
 .ring-wrap[data-mode="paused"] { --c: var(--paused); }
 .ring-wrap[data-mode="arrived"] { --c: var(--free); }
-.ring { width: 100%; height: 100%; display: block; }
-.ring-bg { fill: none; stroke: var(--ring-bg); stroke-width: 14; }
-.ring-fg { fill: none; stroke: var(--c); stroke-width: 14; stroke-linecap: round; transition: stroke-dasharray 0.6s linear, stroke 0.3s; }
+.ring { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.ring-bg { fill: none; stroke: var(--ring-bg); stroke-width: 13; }
+.ring-fg { fill: none; stroke: var(--c); stroke-width: 13; stroke-linecap: round; transition: stroke-dasharray 0.6s linear, stroke 0.3s; }
 .ring-wrap.flash .ring-bg { stroke: var(--c); transition: stroke 0.2s; }
-.ring-text { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 18%; }
-.ring-main { font-size: clamp(1.6rem, 8vw, 2.6rem); font-weight: 800; line-height: 1.1; color: var(--c); }
-.ring-sub { font-size: clamp(1rem, 4.5vw, 1.3rem); font-weight: 600; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
-.drive-target { text-align: center; font-weight: 600; min-height: 1.6em; padding: 0 16px; }
-.drive-map { height: auto; flex: 1; min-height: 140px; margin: 8px 16px 0; width: calc(100% - 32px); }
-.drive-actions { padding-top: 8px; padding-bottom: 12px; }
-
-/* G-plattan: kvadratisk, bollen dit kraften trycker föraren (broms upp, gas ner).
-   Färgfältet ritas i canvas (app.js drawGField), axlar och boll i SVG ovanpå. */
-.gmeter {
-  margin: 8px 16px 0; padding: 10px 12px; border-radius: var(--radius);
-  background: var(--surface); border: 1px solid var(--line);
-  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center;
+.ring-text { position: absolute; inset: 0; pointer-events: none; }
+.ring-main, .ring-sub {
+  position: absolute; left: 50%; white-space: nowrap; font-weight: 800; line-height: 1.2;
+  border-radius: 999px; font-variant-numeric: tabular-nums;
 }
-.gm-pad { position: relative; width: min(40vw, 21vh, 190px); aspect-ratio: 1; max-width: 100%; }
+.ring-main {
+  top: 0; transform: translate(-50%, -30%);
+  background: var(--c); color: var(--bg); font-size: 1.35rem; padding: 4px 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.18); transition: background 0.3s;
+}
+.ring-sub {
+  bottom: 0; transform: translate(-50%, 30%);
+  background: var(--surface); color: var(--fg); border: 3px solid var(--c);
+  font-size: 1.3rem; padding: 2px 14px;
+}
+.ring-sub:empty { display: none; }
+.drive-target { text-align: center; font-weight: 600; font-size: .95rem; min-height: 1.4em; padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drive-map { height: auto; flex: 1; min-height: 120px; margin: 6px 12px 12px; width: calc(100% - 24px); }
+/* Avsluta som rund ✕ uppe till höger, så den inte ligger över fartkurvan */
+.drive-actions { position: absolute; top: calc(70px + env(safe-area-inset-top)); right: 10px; padding: 0; }
+#d-stop { width: 42px; height: 42px; min-height: 0; padding: 0; font-size: 1.1rem; line-height: 1; background: var(--surface); border-radius: 50%; }
+
+/* G-plattan: rund skiva i ringen, bollen dit kraften trycker föraren (broms upp, gas ner).
+   Färgfältet ritas i canvas (app.js drawGField), axlar och boll i SVG ovanpå. */
+.gm-pad {
+  position: absolute; inset: 9%; border-radius: 50%; overflow: hidden;
+  background: var(--surface); box-shadow: inset 0 0 0 2px rgba(0,0,0,.08);
+}
 .gm-pad canvas, .gm-pad svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.gm-pad canvas { background: #2fb36d; }
-.gm-pad text { font: 700 8.5px system-ui, sans-serif; fill: #fff; letter-spacing: .06em; paint-order: stroke; stroke: rgba(0,0,0,.25); stroke-width: 2px; }
+.gm-pad canvas { background: #2fb36d; opacity: .6; }
+.gm-pad text { font: 700 9px system-ui, sans-serif; fill: #fff; letter-spacing: .06em; paint-order: stroke; stroke: rgba(0,0,0,.25); stroke-width: 2px; }
 .gm-axis { stroke: rgba(0,0,0,.28); stroke-width: 1.5; }
 .gm-coast { stroke: #fff; stroke-width: 2; stroke-dasharray: 4 3; opacity: .9; }
-.gm-ball { fill: #fff; stroke: #0a0f0c; stroke-width: 3; transition: cx 0.15s linear, cy 0.15s linear; }
-.gm-info { display: grid; gap: 6px; justify-items: start; min-width: 0; color: var(--muted); font-size: 0.85rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.gm-info b { color: var(--fg); }
-.gm-big { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--fg); }
+.gm-ball { fill: #fff; stroke: #0a0f0c; stroke-width: 3.5; transition: cx 0.15s linear, cy 0.15s linear; }
+.gm-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px;
+  margin: 4px 12px 0; color: var(--muted); font-size: 0.82rem; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.gm-row b { color: var(--fg); }
+.gm-plan { display: none; }
+@media (min-width: 420px) { .gm-plan { display: inline; } }
+.gm-big { font-size: 1.2rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: var(--fg); }
 .gm-chip { font-size: 0.8rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: var(--line); color: var(--muted); }
 .gm-chip.green { background: #2fb36d; color: #fff; }
 .gm-chip.blue { background: #2f80d8; color: #fff; }
@@ -266,10 +306,16 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .curve-chip.ok { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .curve-chip.over { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 
-.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
-.stat b { display: block; font-size: 1.8rem; font-variant-numeric: tabular-nums; }
-.stat span { color: var(--muted); font-size: 0.9rem; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 9px; min-width: 0; }
+.stat b { display: block; font-size: 1.3rem; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stat span { display: block; color: var(--muted); font-size: 0.75rem; line-height: 1.2; }
+/* En ensam sista ruta får hela raden */
+.stats .stat:last-child:nth-child(3n+1) { grid-column: span 3; display: flex; align-items: baseline; gap: 10px; }
+#summary .hint { font-size: .8rem; margin: 6px 0 0; }
+#summary .actions { flex-direction: row; }
+#summary .actions .btn { flex: 1; font-size: .92rem; }
+#record .big-speed { font-size: 4.5rem; margin: 10px 0 4px; }
 
 .toast {
   position: fixed; left: 16px; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 10;
@@ -290,7 +336,12 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 }
 .list li > button.pick:disabled { opacity: 0.55; cursor: default; }
 
-/* Nyckelsidan: demo under knapparna, så knapparna inte ligger fast över listan */
-#key .actions { position: static; background: none; }
-#key .content:first-of-type { flex: 0 0 auto; }
-#key .key-demo { flex: 1; padding-top: 0; }
+/* Nyckelsidan: knapparna samlade, demo som en rad längst ner */
+#key .content:first-of-type { font-size: .95rem; }
+#key .content:first-of-type > p { margin: 4px 0 6px; }
+#key .field { margin: 8px 0 0; }
+#key .actions { padding-bottom: 4px; }
+#key-skip { min-height: 44px; font-size: .95rem; }
+#key .key-demo { flex: none; padding: 0 16px 14px; display: flex; align-items: center; gap: 10px; overflow: visible; }
+#key .key-demo .section-title { margin: 0; }
+#key .key-demo .btn { flex: 1; min-height: 44px; }
