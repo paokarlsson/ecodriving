@@ -1276,7 +1276,7 @@ function renderDrive(view, obs = null) {
       setRing('free', 'Fri väg', view.next && view.distToNext != null ? `${kindLabel(view.next.kind)} om ${fmtDist(view.distToNext)}` : '', 0);
       break;
     case 'approach':
-      setRing('approach', fmtDist(view.distToRelease), 'släpp gasen om', 1 - view.distToRelease / 800);
+      setRing('approach', 'Släpp om', fmtDist(view.distToRelease), 1 - view.distToRelease / 800);
       target = describeTarget(view.target);
       if (view.brakeNeeded) target += ' · nedförsbacke';
       break;

@@ -54,11 +54,11 @@
     </div>
     <div class="actions">
       <button class="btn primary" id="key-save">Testa och spara</button>
-      <button class="btn ghost" id="key-skip">Hoppa över – kalibrering och demo fungerar ändå</button>
+      <button class="btn ghost" id="key-skip">Hoppa över (demo fungerar ändå)</button>
     </div>
     <div class="content key-demo">
       <h2 class="section-title">Demo</h2>
-      <button class="btn ghost" id="demo-btn">Kort testbana (ingen nyckel behövs)</button>
+      <button class="btn ghost" id="demo-btn">Testbana utan nyckel</button>
     </div>
   </section>
 
@@ -157,7 +157,7 @@
     </div>
     <div class="actions">
       <button class="btn primary" id="ov-start">Starta</button>
-      <button class="btn ghost" id="ov-fav">Spara som favorit</button>
+      <button class="btn ghost" id="ov-fav">☆ Favorit</button>
     </div>
   </section>
 
@@ -178,42 +178,42 @@
       <button class="btn small" id="d-simspeed" hidden aria-label="Simuleringens fart">4×</button>
       <button class="icon-btn" id="d-sound" aria-label="Ljud av/på">🔊</button>
     </div>
+    <!-- Nedräkningen är ringen; g-plattan ligger som en skiva inuti.
+         Texten sitter som brickor på ringen så att kulan i mitten syns. -->
     <div class="ring-wrap" id="d-ringwrap" data-mode="free">
       <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
-        <circle class="ring-bg" cx="100" cy="100" r="88"/>
-        <circle class="ring-fg" id="d-ring" cx="100" cy="100" r="88" pathLength="100" stroke-dasharray="0 100" transform="rotate(-90 100 100)"/>
+        <circle class="ring-bg" cx="100" cy="100" r="92"/>
+        <circle class="ring-fg" id="d-ring" cx="100" cy="100" r="92" pathLength="100" stroke-dasharray="0 100" transform="rotate(-90 100 100)"/>
       </svg>
-      <div class="ring-text">
-        <div class="ring-main" id="d-main">Fri väg</div>
-        <div class="ring-sub" id="d-sub"></div>
-      </div>
-    </div>
-    <div class="drive-target" id="d-target"></div>
-    <div class="gmeter" id="d-gmeter">
       <div class="gm-pad">
         <canvas id="d-gfield" aria-hidden="true"></canvas>
         <svg viewBox="0 0 200 200" aria-hidden="true">
           <line x1="100" y1="14" x2="100" y2="186" class="gm-axis"/>
           <line x1="14" y1="100" x2="186" y2="100" class="gm-axis"/>
           <line id="d-gcoast" x1="70" x2="130" y1="100" y2="100" class="gm-coast"/>
-          <text x="100" y="11" text-anchor="middle">BROMS</text>
-          <text x="100" y="196" text-anchor="middle">GAS</text>
+          <text x="100" y="22" text-anchor="middle">BROMS</text>
+          <text x="100" y="186" text-anchor="middle">GAS</text>
           <g id="d-gtrail"></g>
           <circle id="d-gball" cx="100" cy="100" r="9" class="gm-ball"/>
         </svg>
       </div>
-      <div class="gm-info" aria-live="off">
-        <span class="gm-big" id="d-gnow">0,00 g</span>
-        <span class="gm-chip" id="d-gchip">Står still</span>
-        <span class="gm-line">sida <b id="d-glat">0,00 g</b></span>
-        <span class="gm-line">längs <b id="d-glon">–</b></span>
-        <span class="gm-line" id="d-gplan"></span>
+      <div class="ring-text">
+        <div class="ring-main" id="d-main">Fri väg</div>
+        <div class="ring-sub" id="d-sub"></div>
       </div>
+    </div>
+    <div class="drive-target" id="d-target"></div>
+    <div class="gm-row" id="d-gmeter" aria-live="off">
+      <span class="gm-big" id="d-gnow">0,00 g</span>
+      <span class="gm-chip" id="d-gchip">Står still</span>
+      <span class="gm-line">sida <b id="d-glat">0,00 g</b></span>
+      <span class="gm-line">längs <b id="d-glon">–</b></span>
+      <span class="gm-line gm-plan" id="d-gplan"></span>
     </div>
     <canvas id="d-map" class="map drive-map" aria-hidden="true"></canvas>
     <canvas id="d-graph" class="map drive-map" role="img" aria-label="Fartkurva: beräknad rullning mot målet och din fart. Tryck för karta." hidden></canvas>
     <div class="actions drive-actions">
-      <button class="btn ghost" id="d-stop">Avsluta</button>
+      <button class="btn ghost" id="d-stop" aria-label="Avsluta körning" title="Avsluta körning">✕</button>
     </div>
   </section>
 
@@ -228,7 +228,7 @@
     </div>
     <div class="actions">
       <button class="btn primary" id="sum-done">Klar</button>
-      <button class="btn ghost" id="sum-copy">Kopiera körloggen för analys</button>
+      <button class="btn ghost" id="sum-copy">Kopiera logg</button>
     </div>
   </section>
 
