@@ -6,7 +6,7 @@ import { buildRoute, headingAt, xyAt, curveTargets, gradeAt } from './route.js';
 import { fetchOsmAlongRoute, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
 import { DEFAULT_MODEL, decel } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
-import { DriveEngine, releaseMessage } from './drive.js';
+import { DriveEngine, releaseMessage, travelHeading } from './drive.js';
 import { demoData } from './demo.js';
 import { LateralMeter, CurveTracker, isStraightAt, routeYaw, curveRadiusText } from './lateral.js';
 import { DriveLog, makeLogStore } from './logbook.js';
@@ -741,7 +741,7 @@ $('ov-fav').addEventListener('click', () => {
 // ---------- Körning ----------
 const drive = {
   engine: null, stops: [], muted: false, compass: null, sim: null, simTimer: null,
-  rerouting: false, lastReroute: 0, coastStart: null, flashUntil: 0, lastObs: null,
+  rerouting: false, lastReroute: 0, rerouteTries: 0, trail: [], coastStart: null, flashUntil: 0, lastObs: null,
 };
 
 $('ov-start').addEventListener('click', () => startDrive());
@@ -758,6 +758,9 @@ function startDrive() {
   resetSpeedGraph();
   drive.coastStart = null;
   drive.rerouting = false;
+  drive.lastReroute = 0;
+  drive.rerouteTries = 0;
+  drive.trail = [];
   drive.meter = new LateralMeter();
   // Telefonen sitter oftast likadant: börja med förra körningens inlärda axel
   const ga = store.gyroAxis;
@@ -1166,7 +1169,15 @@ function onDriveObs(obs) {
   }
   applyLiveCoast(view);
   for (const ev of events) handleDriveEvent(ev, obs);
-  if (drive.engine) renderDrive(view, obs);
+  if (drive.engine) {
+    // Fortfarande utanför rutten: försök igen om förra försöket misslyckades.
+    if (drive.engine.paused === 'offroute') {
+      if (!events.some(e => e.type === 'offroute')) reroute(obs);
+    } else drive.rerouteTries = 0;
+    renderDrive(view, obs);
+  }
+  drive.trail.push({ t: obs.t, lat: obs.lat, lon: obs.lon, accuracy: obs.accuracy });
+  while (drive.trail.length && obs.t - drive.trail[0].t > 30) drive.trail.shift();
 }
 
 function logDrive(view, obs, events) {
@@ -1228,16 +1239,25 @@ function handleDriveEvent(ev, obs) {
   }
 }
 
+/** Väntetid (ms) före nästa försök att räkna om rutten: 5, 10, 20, 40, 60 s. */
+function rerouteWait(tries) {
+  return tries === 0 ? 0 : Math.min(60000, 5000 * 2 ** (tries - 1));
+}
+
 async function reroute(obs) {
   if (plan.demo || !store.key || drive.rerouting) return;
-  if (Date.now() - drive.lastReroute < 20000) return;
+  if (Date.now() - drive.lastReroute < rerouteWait(drive.rerouteTries)) return;
   drive.rerouting = true;
   drive.lastReroute = Date.now();
+  const engine = drive.engine;
   setRing('paused', 'Ny rutt', 'beräknas…', 0);
   try {
-    const r = await getRoute(store.key, obs, plan.dest);
+    const heading = travelHeading(drive.trail, obs);
+    const r = await getRoute(store.key, { lat: obs.lat, lon: obs.lon, heading }, plan.dest);
+    if (drive.engine !== engine) return;   // körningen avslutades under tiden
     bgProgress = null;
     const p = await prepare(r.coords, null, () => {}, full => applyFullPlan(full.route, full));
+    if (drive.engine !== engine) return;
     const stats = drive.engine.stats;
     plan = { ...plan, ...p, duration: r.duration,
       apiRoute: { from: { lat: obs.lat, lon: obs.lon }, to: { lat: plan.dest.lat, lon: plan.dest.lon }, distance: r.distance, duration: r.duration, coords: r.coords } };
@@ -1246,11 +1266,17 @@ async function reroute(obs) {
     resetSpeedGraph();
     drive.engine.stats = stats;
     drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
-    drive.log?.event(obs.t, 'reroute', { lat: obs.lat, lon: obs.lon, route: routeMeta(plan) });
+    drive.log?.event(obs.t, 'reroute', { lat: obs.lat, lon: obs.lon, heading, tries: drive.rerouteTries + 1, route: routeMeta(plan) });
+    drive.rerouteTries = 0;
     if (!drive.muted) sounds.resume();
     say('Ny rutt');
   } catch (e) {
-    toast(e.message, true);
+    if (drive.engine !== engine) return;
+    drive.rerouteTries++;
+    drive.log?.event(obs.t, 'rerouteFailed', { tries: drive.rerouteTries, error: e.message });
+    // Visa felet en gång; därefter försöker appen tyst igen.
+    if (drive.rerouteTries === 1) toast(`${e.message}. Försöker igen.`, true);
+    setRing('paused', 'Ny rutt', 'försöker igen…', 0);
   } finally {
     drive.rerouting = false;
   }
