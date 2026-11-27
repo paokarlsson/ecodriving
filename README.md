@@ -50,6 +50,12 @@ Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med ru
 
 **Under rullningen** jämförs bilens faktiska inbromsning (backen borträknad) med modellen. Efter 3 s rullning börjar avvikelsen läggas på A, gradvis tills hela avvikelsen gäller efter 8 s (högst −0,25 till +0,4 m/s²). Den justerade modellen styr bromsvarningen (”broms kan behövas” när farten ligger mer än ca 4 km/h över rullkurvan) och fartkurvan, som då visar ”rullkurva · justerad”. Justeringen gäller bara den pågående rullningen; när den tar slut gäller den sparade modellen igen och rullningen lärs in som vanligt. Loggen får händelsen `liveCoast` och fältet `coastAdj` i varje prov.
 
+## Ny rutt vid annan väg
+
+- Bilen räknas som utanför rutten när den i 4 s har varit längre bort än 15 m + 2 × GPS-noggrannheten (25–40 m), så att en parallell väg syns vid god GPS. Över ca 30 km/h och med god GPS räknas det också som avvikelse när GPS-kursen skiljer sig mer än 60° från ruttens riktning, t.ex. i en avfart.
+- Den nya rutten börjar i färdriktningen (GPS-kursen, eller riktningen från en position minst 20 m bakåt), så att den inte vänder bilen. Hittar tjänsten ingen sådan rutt görs ett försök utan riktning.
+- Misslyckas omberäkningen (t.ex. utan täckning) försöker appen igen så länge bilen är utanför rutten, efter 5, 10, 20, 40 och sedan var 60:e sekund. Felet visas bara första gången.
+
 ## Körlogg (JSON)
 
 Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställningar → Data → *Visa körloggar*, eller från sammanfattningen:
@@ -59,7 +65,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
 `samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m).
-Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
+Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute` (med färdriktning och antal försök), `rerouteFailed`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Testbana
 

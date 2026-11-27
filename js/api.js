@@ -36,9 +36,21 @@ async function call(url, opts) {
   return res.json();
 }
 
-/** Rutt med höjd. from/to = {lat, lon}. Returnerar GeoJSON-featurens koordinater [[lon, lat, ele]] och sammanfattning. */
+/**
+ * Rutt med höjd. from/to = {lat, lon}. Med from.heading (grader, 0 = norr)
+ * börjar rutten i den riktningen, så att en ny rutt under körning inte vänder
+ * bilen; hittar tjänsten ingen sådan rutt görs ett nytt försök utan riktning.
+ * Returnerar GeoJSON-featurens koordinater [[lon, lat, ele]] och sammanfattning.
+ */
 export async function getRoute(key, from, to, { signal } = {}) {
-  const json = await call(ORS_BASE + DIRECTIONS, {
+  const heading = from.heading != null && Number.isFinite(from.heading) ? from.heading : null;
+  const body = {
+    coordinates: [[from.lon, from.lat], [to.lon, to.lat]],
+    elevation: true,
+    instructions: false,
+    units: 'm',
+  };
+  const opts = b => ({
     method: 'POST',
     signal,
     headers: {
@@ -46,13 +58,17 @@ export async function getRoute(key, from, to, { signal } = {}) {
       'Content-Type': 'application/json',
       'Accept': 'application/geo+json, application/json',
     },
-    body: JSON.stringify({
-      coordinates: [[from.lon, from.lat], [to.lon, to.lat]],
-      elevation: true,
-      instructions: false,
-      units: 'm',
-    }),
+    body: JSON.stringify(b),
   });
+  let json;
+  if (heading != null) {
+    try {
+      json = await call(ORS_BASE + DIRECTIONS, opts({ ...body, bearings: [[Math.round(heading), 45], []] }));
+    } catch (e) {
+      if (!(e instanceof ApiError) || (e.code !== 'route' && e.code !== 'server')) throw e;
+    }
+  }
+  json ??= await call(ORS_BASE + DIRECTIONS, opts(body));
   const f = json.features && json.features[0];
   if (!f) throw new ApiError('route', 'Ingen rutt hittades');
   return {

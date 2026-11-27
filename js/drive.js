@@ -1,12 +1,17 @@
 // Körmotor: kartmatchning, val av styrande fartmål, släpp-signal och statistik.
 // Ren logik utan DOM: matas med GPS-observationer, ger tillstånd och händelser.
-import { matchToRoute, gradeAt } from './route.js';
+import { matchToRoute, gradeAt, headingAt } from './route.js';
+import { angleDiff, headingXY, makeProjector } from './geo.js';
 import { releasePoint } from './physics.js';
 
 export const DRIVE = {
   maxAccuracy: 30,     // m; sämre GPS → pausa
-  offRouteDist: 40,    // m från rutten räknas som avvikelse
+  offRouteDist: 40,    // m från rutten räknas som avvikelse (vid sämre GPS)
+  offRouteMin: 25,     // m: lägsta gräns vid god GPS (gränsen är 15 m + 2 × noggrannheten)
   offRouteHold: 4,     // s innan avvikelse bekräftas
+  headingOff: 60,      // grader mellan GPS-kurs och rutt som räknas som annan väg
+  headingMinV: 8,      // m/s: kursen jämförs bara över ca 30 km/h
+  headingMaxAcc: 15,   // m: och bara vid god GPS
   lookahead: 5000,     // m framåt som fartmål beaktas
   approachDist: 800,   // m kvar till signal då nedräkning visas
   followWindow: 4,     // s efter signal+marginal då släppt gas ska synas
@@ -55,7 +60,7 @@ export class DriveEngine {
 
     // 2. Kartmatchning
     const m = matchToRoute(this.route, obs.lat, obs.lon, this.sHint);
-    if (!m || m.dist > DRIVE.offRouteDist) {
+    if (!m || this.offRoute(m, obs)) {
       if (this.offSince == null) this.offSince = t;
       if (t - this.offSince >= DRIVE.offRouteHold) {
         if (this.paused !== 'offroute') events.push({ type: 'offroute' });
@@ -176,6 +181,20 @@ export class DriveEngine {
     return !!rp.brakeNeeded || !!rp.late;
   }
 
+  /**
+   * Har bilen lämnat rutten fast positionen matchar? Gränsen för avståndet
+   * krymper med bättre GPS (en parallell väg 30 m bort syns då), och en
+   * GPS-kurs som pekar en annan väg än rutten räknas också som avvikelse.
+   */
+  offRoute(m, obs) {
+    const acc = obs.accuracy ?? DRIVE.offRouteDist;
+    const limit = Math.max(DRIVE.offRouteMin, Math.min(DRIVE.offRouteDist, 15 + 2 * acc));
+    if (m.dist > limit) return true;
+    const h = obs.heading, v = obs.speed;
+    if (h == null || !Number.isFinite(h) || v == null || v < DRIVE.headingMinV || acc > DRIVE.headingMaxAcc) return false;
+    return angleDiff(h, headingAt(this.route, m.s)) > DRIVE.headingOff;
+  }
+
   setPaused(reason, events) {
     if (this.paused !== reason) {
       if (!this.paused) events.push({ type: 'pause', reason });
@@ -187,6 +206,25 @@ export class DriveEngine {
   view(mode, extra = {}) {
     return { mode, s: this.s, v: this.v, paused: this.paused, remaining: this.route.length - this.s, ...extra };
   }
+}
+
+/**
+ * Färdriktning (grader, 0 = norr) för en ny rutt: GPS-kursen vid fart och god
+ * GPS, annars riktningen från en position minst 20 m bakåt de senaste 20 s.
+ * trail = tidigare observationer, äldst först. null om riktningen är okänd.
+ */
+export function travelHeading(trail, obs) {
+  const h = obs.heading;
+  if (h != null && Number.isFinite(h) && (obs.speed ?? 0) > 3 && (obs.accuracy ?? 99) <= 30) return h;
+  const proj = makeProjector(obs.lat, obs.lon);
+  for (let i = trail.length - 1; i >= 0; i--) {
+    const p = trail[i];
+    if (obs.t - p.t > 20) break;
+    if ((p.accuracy ?? 0) > 30) continue;
+    const [x, y] = proj.toXY(p.lat, p.lon);
+    if (Math.hypot(x, y) >= 20) return headingXY(-x, -y);
+  }
+  return null;
 }
 
 /** Talat meddelande för en släpp-händelse. */
