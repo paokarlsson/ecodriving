@@ -39,6 +39,9 @@ export const store = {
   get recents() { return get('recents', []); },
   set recents(v) { set('recents', (v || []).slice(0, 5)); },
   /** Inlärd gyroaxel {axis: [x, y, z], r2, date}. */
+  /** Vald OBD-dosa: {id, name, auto}. */
+  get obd() { return get('obd'); },
+  set obd(v) { set('obd', v); },
   get gyroAxis() { return get('gyroAxis'); },
   set gyroAxis(v) { set('gyroAxis', v); },
   /** Inlärd framåtaxel för accelerometern (gas/broms) {axis: [x, y, z], r2, date}. */

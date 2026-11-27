@@ -18,6 +18,7 @@ export const DRIVE = {
   followDrop: 0.4,     // m/s fartminskning som räknas som släppt gas
   arriveDist: 25,      // m kvar till målet
   brakeSlack: 1.1,     // m/s över rullkurvan som tolereras under rullning
+  pedalFresh: 3,       // s: så länge efter senaste pedalvärdet gäller pedalen i stället för GPS-farten
 };
 
 export class DriveEngine {
@@ -42,6 +43,8 @@ export class DriveEngine {
     this.pending = [];       // uppföljning av signaler
     this.stats = { signals: 0, followed: 0, late: 0, brakeWarnings: 0, distance: 0, startT: null, endT: null };
     this.arrived = false;
+    this.pedalT = null;      // tid för senaste pedalvärde (OBD)
+    this.released = null;    // gasen släppt enligt pedalen
     this.gradeAt = s => gradeAt(route, s);
   }
 
@@ -79,10 +82,12 @@ export class DriveEngine {
     if (this.lastS != null && s > this.lastS) this.stats.distance += s - this.lastS;
     this.sHint = s; this.s = s; this.v = v; this.lastT = t; this.lastS = s;
 
-    // 3. Uppföljning: släppte föraren gasen?
+    // 3. Uppföljning: släppte föraren gasen? Med pedalen (OBD) avgör pedal(),
+    //    annars syns det på att GPS-farten sjunker.
+    const byPedal = this.pedalActive(t);
     for (const p of this.pending) {
       p.minV = Math.min(p.minV, v);
-      if (!p.done && p.v0 - p.minV >= DRIVE.followDrop) {
+      if (!p.done && !byPedal && p.v0 - p.minV >= DRIVE.followDrop) {
         p.done = true; p.followed = true; this.stats.followed++;
         events.push({ type: 'follow', followed: true, target: p.target, afterS: t - p.t0 });
       }
@@ -108,7 +113,7 @@ export class DriveEngine {
       if (s >= c.target.s - 5) {
         events.push({ type: 'reached', target: c.target, v });
         this.coast = null;
-      } else if (v - c.minV > 0.8) {
+      } else if (byPedal ? c.released && this.released === false : v - c.minV > 0.8) {
         // Föraren gav gas igen – sluta visa "rullar".
         this.coast = null;
       } else {
@@ -142,7 +147,7 @@ export class DriveEngine {
       if (best.rp.brakeNeeded) this.stats.brakeWarnings++;
       events.push({ type: 'release', target: best.target, late, brakeNeeded: best.rp.brakeNeeded });
       this.pending.push({ t0: t, v0: v, minV: v, done: false, target: best.target });
-      this.coast = { target: best.target, t0: t, minV: v, brakeNeeded: best.rp.brakeNeeded };
+      this.coast = { target: best.target, t0: t, minV: v, brakeNeeded: best.rp.brakeNeeded, released: this.released === true };
       return { view: this.view('coasting', { target: best.target, distToTarget: best.target.s - s, brakeNeeded: best.rp.brakeNeeded, justReleased: true }), events };
     }
     if (dist <= 0) {
@@ -155,6 +160,33 @@ export class DriveEngine {
       view: this.view(mode, { target: best.target, distToRelease: dist, brakeNeeded: best.rp.brakeNeeded, next: best.target, distToNext: best.target.s - s }),
       events,
     };
+  }
+
+  /** Gäller pedalen (OBD) just nu? */
+  pedalActive(t) {
+    return this.pedalT != null && t - this.pedalT <= DRIVE.pedalFresh && this.released != null;
+  }
+
+  /**
+   * Gaspedalen från OBD (t i samma tidsskala som GPS, released = gasen helt
+   * släppt). Ger exakt när föraren släppte gasen efter en signal. Returnerar
+   * händelser som update().
+   */
+  pedal(t, released) {
+    const events = [];
+    if (released == null) return events;
+    this.pedalT = t;
+    this.released = released;
+    if (this.coast && released) this.coast.released = true;
+    if (released) {
+      for (const p of this.pending) {
+        if (p.done) continue;
+        p.done = true; p.followed = true; this.stats.followed++;
+        events.push({ type: 'follow', followed: true, target: p.target, afterS: Math.max(0, t - p.t0), byPedal: true });
+      }
+      this.pending = this.pending.filter(p => !p.done);
+    }
+    return events;
   }
 
   /**

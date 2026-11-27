@@ -345,3 +345,64 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 #key .key-demo { flex: none; padding: 0 16px 14px; display: flex; align-items: center; gap: 10px; overflow: visible; }
 #key .key-demo .section-title { margin: 0; }
 #key .key-demo .btn { flex: 1; min-height: 44px; }
+
+/* OBD-dosa */
+.obd-card { display: grid; gap: 12px; }
+.obd-card.off { border: 2px solid var(--accent); }
+.obd-head { display: flex; gap: 10px; align-items: flex-start; }
+.obd-head p { margin: 0; }
+.obd-title { font-weight: 700; }
+.obd-sub { color: var(--muted); font-size: .92rem; }
+.obd-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 8px; background: var(--paused); }
+.obd-dot.on { background: var(--zone-green); }
+.obd-dot.busy { background: var(--approach); }
+.obd-steps { margin: 0; padding: 10px 12px 10px 32px; background: var(--bg); border-radius: 10px; font-size: .92rem; display: grid; gap: 4px; }
+.obd-test { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.obd-test li { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.obd-test li span:nth-child(2) { flex: 1; }
+.obd-test li .v { color: var(--muted); font-size: .9rem; }
+.obd-test .mark { width: 20px; text-align: center; font-weight: 800; }
+.obd-test .mark.yes { color: var(--accent); }
+.obd-test .mark.no { color: var(--muted); }
+.obd-live { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.obd-val { background: var(--bg); border-radius: 10px; padding: 8px 12px; display: grid; gap: 2px; }
+.obd-val span { font-size: .8rem; color: var(--muted); }
+.obd-val b { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.obd-val.wide { grid-column: span 2; grid-template-columns: 1fr auto; align-items: center; column-gap: 10px; }
+.obd-val.wide span { grid-column: span 2; }
+.obd-val.wide b { font-size: 1.05rem; min-width: 3.2em; text-align: right; }
+.obd-bar { height: 12px; border-radius: 6px; background: var(--ring-bg); overflow: hidden; }
+.obd-bar div { height: 100%; width: 0; background: var(--approach); border-radius: 6px; transition: width .15s linear; }
+.obd-bar div.released { background: var(--zone-green); }
+
+.obd-chip {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 3px 10px; border-radius: 999px;
+  border: 0; font: 800 .8rem system-ui, sans-serif; background: var(--line); color: var(--muted); cursor: pointer;
+}
+.obd-chip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.obd-chip.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.obd-chip.lost { text-decoration: line-through; }
+.obd-chip.busy { color: var(--approach); }
+
+/* Gaspedalen som båge i ringen: g-plattan krymper så att bågen får plats */
+.ring-wrap.obd .gm-pad { inset: 15%; }
+.pedal-bg, .pedal-fg { fill: none; stroke-width: 6; stroke-linecap: round; }
+.pedal-bg { stroke: var(--ring-bg); }
+.pedal-fg { stroke: var(--approach); transition: stroke-dasharray .15s linear; }
+.pedal-arc.released .pedal-fg { stroke: var(--zone-green); }
+.pedal-dot { fill: var(--paused); }
+.pedal-arc.released .pedal-dot { fill: var(--zone-green); }
+.ring-badge {
+  position: absolute; left: 50%; top: 10.5%; transform: translateX(-50%); white-space: nowrap;
+  background: var(--surface); color: var(--accent); border: 1px solid var(--line); border-radius: 999px;
+  font-weight: 700; font-size: .85rem; padding: 2px 10px; box-shadow: 0 1px 4px rgba(0,0,0,.12);
+}
+.ring-badge.late { color: var(--approach); }
+
+/* Sammanfattning: reaktionstid per signal */
+.react-bars { display: flex; align-items: flex-end; gap: 4px; height: 100px; }
+.react-bars i { flex: 1; min-width: 3px; border-radius: 3px 3px 0 0; background: var(--zone-green); }
+.react-bars i.late { background: var(--approach); }
+.react-legend { display: flex; gap: 14px; margin-top: 8px; font-size: .8rem; color: var(--muted); }
+.react-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; background: var(--zone-green); }
+.react-legend i.late { background: var(--approach); }

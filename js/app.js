@@ -12,6 +12,7 @@ import { LateralMeter, CurveTracker, isStraightAt, routeYaw, curveRadiusText } f
 import { DriveLog, makeLogStore } from './logbook.js';
 import { RawRecorder, readRaw, deleteRaw, persistStorage } from './rawstore.js';
 import { CoastLearner, CoastStats, acceptSegment } from './coastlearn.js';
+import { ObdLink, chooseDevice, knownDevice, bleSupported, engineBraking } from './obd.js';
 
 // Körloggar i telefonens lagring
 const safeStorage = {
@@ -776,6 +777,7 @@ function startDrive() {
   drive.lastReleaseT = null;
   drive.accRatios = [];
   drive.accWarned = false;
+  resetDriveObd();
   drive.log = new DriveLog({
     kind: 'drive',
     dest: plan.dest ? { name: plan.dest.name, lat: plan.dest.lat, lon: plan.dest.lon } : null,
@@ -791,6 +793,8 @@ function startDrive() {
   renderDrive(drive.engine.view('free', { next: plan.targets[0], distToNext: plan.targets[0]?.s }));
   drive.stops.push(keepAwake());
   $('d-simspeed').hidden = !plan.demo;
+  renderObdChip();
+  if (!plan.demo) autoConnectObd();
   if (plan.demo) {
     drive.meter.defaultSign = 1; // simulerat gyro har redan höger positiv
     drive.sim = new SimCar(plan.route, plan.limits, model());
@@ -851,6 +855,7 @@ function saveDriveLog(stats = null) {
     gyroAxisR2: m?.axisR2 ?? null, gyroSign: m?.sign ?? null,
     accAxis: m?.fwd ? m.fwd.map(x => Math.round(x * 1e5) / 1e5).join(',') : null, accAxisR2: m?.fwdR2 ?? null,
     coastFound: drive.coastFound ?? 0, coastUsed: drive.coastUsed ?? 0,
+    obd: drive.obdUsed ? obdSummary() : null,
     modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
   logStore.save(drive.log);
@@ -880,13 +885,15 @@ function handleCoastSegment(seg, t) {
   // rullning och skulle annars få modellen att tro att bilen rullar längre.
   const r = drive.lastReleaseT;
   const fromSignal = r != null && seg.startT >= r - 3 && seg.startT <= r + 8;
-  if (verdict.ok && !fromSignal) verdict = { ok: false, reason: 'började inte vid en släpp-signal', resid: verdict.resid };
+  // Med gaspedalen från OBD vet appen att gasen var helt släppt hela rullningen
+  const pedalOk = pedalReleasedBetween(seg.startT, seg.endT);
+  if (verdict.ok && !fromSignal && !pedalOk) verdict = { ok: false, reason: 'började inte vid en släpp-signal', resid: verdict.resid };
   const meanA = seg.points.length ? seg.points.reduce((a, p) => a + p.a, 0) / seg.points.length : null;
   const learn = verdict.ok && store.settings.learnCoast && !plan.demo;
   drive.log?.event(t, 'coast', {
     s: seg.s, durS: seg.dur, fromKmh: seg.fromV * 3.6, toKmh: seg.toV * 3.6, end: seg.end,
     points: seg.points.length, meanA, resid: verdict.resid ?? null,
-    accepted: verdict.ok, reason: verdict.reason ?? null, learned: learn, fromSignal,
+    accepted: verdict.ok, reason: verdict.reason ?? null, learned: learn, fromSignal, pedalOk,
   });
   if (!learn) return;
   const st = coastStats();
@@ -1143,6 +1150,7 @@ function onDriveObs(obs) {
   const prevObs = drive.lastObs;
   const prevS = drive.engine.s;
   drive.lastObs = obs;
+  drive.obsWall = Date.now() / 1000;
   if (!plan.demo) drive.raw?.addGps(obs);
   const { view, events } = drive.engine.update(obs);
   recordSpeed(view, obs);
@@ -1164,6 +1172,7 @@ function onDriveObs(obs) {
       grade: gradeAt(plan.route, view.s || 0),
       // Utan höjddata går backen inte att räkna bort
       ok: view.mode !== 'paused' && !view.paused && plan.route.hasEle,
+      gas: obdActive() && obd.last.released === false,
     });
     if (seg) handleCoastSegment(seg, obs.t);
   }
@@ -1189,12 +1198,13 @@ function logDrive(view, obs, events) {
     s: view.s, lat: obs.lat, lon: obs.lon, kmh: (obs.speed ?? view.v ?? 0) * 3.6, acc: obs.accuracy,
     mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, lonG: m?.lonG, rel: view.distToRelease, alt: obs.alt,
     coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
+    ...(obdActive() ? { pedal: obd.last.pedal, rpm: obd.last.rpm, obdKmh: obd.last.kmh } : {}),
   });
   for (const ev of events) {
     const tg = ev.target;
     const at = { s: view.s, kmh: (view.v || 0) * 3.6 };
     if (ev.type === 'release') L.event(obs.t, 'release', { ...at, kind: tg.kind, targetS: tg.s, targetKmh: tg.v * 3.6, late: ev.late, brakeNeeded: ev.brakeNeeded });
-    else if (ev.type === 'follow') L.event(obs.t, 'follow', { followed: ev.followed, kind: tg?.kind, targetS: tg?.s, afterS: ev.afterS ?? null });
+    else if (ev.type === 'follow') L.event(obs.t, 'follow', { followed: ev.followed, kind: tg?.kind, targetS: tg?.s, afterS: ev.afterS ?? null, byPedal: !!ev.byPedal });
     else if (ev.type === 'reached') L.event(obs.t, 'reached', { ...at, kind: tg.kind, targetS: tg.s, targetKmh: tg.v * 3.6 });
     else if (ev.type === 'pause') L.event(obs.t, 'pause', { ...at, reason: ev.reason, acc: obs.accuracy });
     else if (ev.type === 'resume' || ev.type === 'offroute') L.event(obs.t, ev.type, at);
@@ -1226,6 +1236,14 @@ function handleDriveEvent(ev, obs) {
       break;
     case 'offroute':
       reroute(obs);
+      break;
+    case 'follow':
+      drive.reactions.push({ afterS: ev.afterS ?? null, followed: ev.followed, byPedal: !!ev.byPedal });
+      if (ev.byPedal) {
+        const late = ev.afterS > 2;
+        drive.badge = { text: `${late ? '' : '✓ '}Gas släppt efter ${ev.afterS.toFixed(1).replace('.', ',')} s`, late, until: Date.now() + 6000 };
+        renderObdDrive();
+      }
       break;
     case 'arrived':
       if (!drive.muted) sounds.done();
@@ -1323,6 +1341,7 @@ function renderDrive(view, obs = null) {
   }
   $('d-target').textContent = target;
   renderSigns(view);
+  renderObdDrive();
   if (plan) {
     const s = view.s || 0;
     const graph = speedGraphData(view);
@@ -1492,7 +1511,9 @@ function showSummary(st) {
     [st.late, 'sena signaler'],
     [st.brakeWarnings, 'backvarningar'],
     [`${drive.coastUsed ?? 0} / ${drive.coastFound ?? 0}`, 'rullningar använda / mätta'],
+    ...obdStatRows(),
   ].map(([b, s]) => `<div class="stat"><b>${esc(b)}</b><span>${esc(s)}</span></div>`).join('');
+  renderReactionChart();
   renderCurveSummary();
   stack.length = 0;
   stack.push('home');
@@ -1538,6 +1559,7 @@ function enterSettings() {
     ? `Rullprov ${new Date(c.date).toLocaleDateString('sv-SE')} (${c.runs} prov).`
     : 'Inte kalibrerad – typvärden används.';
   renderCoastShow();
+  renderObdCard();
   const s = store.settings;
   bindRange('set-margin', 'marginS', v => `${v.toFixed(1).replace('.', ',')} s`, s);
   bindGForce(s, 'set-alat', 'aLat');
@@ -1812,6 +1834,294 @@ $('set-reset').addEventListener('click', () => {
   location.reload();
 });
 
+// ---------- OBD-dosa ----------
+const obd = { last: null, step: null, lostToast: false };
+const obdLink = new ObdLink({ onState: onObdState, onSample: onObdSample, onStep: step => { obd.step = step; renderObdCard(); } });
+
+/** Ger dosan färska värden just nu? */
+function obdActive() {
+  return obdLink.state === 'connected' && !!obd.last && Date.now() / 1000 - obd.last.t < 3;
+}
+
+function resetDriveObd() {
+  drive.reactions = [];
+  drive.badge = null;
+  drive.obdUsed = false;
+  drive.pedalHist = [];
+  drive.fuelL = 0; drive.fuelKnown = false;
+  drive.ebrakeM = 0; drive.fuelCutKnown = false;
+  drive.obdPrevT = null;
+  drive.obsWall = null;
+  obd.lostToast = false;
+}
+
+/** Väggklockans tid (s) i GPS-tidens skala; i demon går tiden snabbare. */
+function obsTime(wallT) {
+  if (!drive.lastObs || drive.obsWall == null) return null;
+  return drive.lastObs.t + (wallT - drive.obsWall) * (drive.sim ? drive.simSpeed || 1 : 1);
+}
+
+/** Var gasen helt släppt (enligt OBD) hela tiden mellan t0 och t1? */
+function pedalReleasedBetween(t0, t1) {
+  const h = (drive.pedalHist || []).filter(p => p.t >= t0 && p.t <= t1);
+  if (h.length < Math.max(2, (t1 - t0) * 0.5)) return false;
+  return h.every(p => p.released);
+}
+
+function onObdSample(s) {
+  obd.last = s;
+  if (!$('settings').hidden) renderObdLive();
+  if (!drive.engine) return;
+  drive.obdUsed = true;
+  drive.raw?.addObd(s);
+  // Dosans tid räknas om till GPS-tidens skala (positionernas tidsstämplar)
+  const t = obsTime(s.t);
+  const dt = drive.obdPrevT != null ? Math.min(2, s.t - drive.obdPrevT) : 0;
+  drive.obdPrevT = s.t;
+  if (s.fuelRate != null) { drive.fuelL += s.fuelRate * dt / 3600; drive.fuelKnown = true; }
+  if (s.fuelCut != null) drive.fuelCutKnown = true;
+  if (drive.fuelCutKnown ? s.fuelCut : engineBraking(s)) drive.ebrakeM += (s.kmh || 0) / 3.6 * dt;
+  if (t == null) return;
+  drive.pedalHist.push({ t, released: s.released });
+  while (drive.pedalHist.length && t - drive.pedalHist[0].t > 180) drive.pedalHist.shift();
+  if (drive.rerouting) return;
+  const events = drive.engine.pedal(t, s.released);
+  for (const ev of events) {
+    const tg = ev.target;
+    drive.log?.event(t, 'follow', { followed: ev.followed, kind: tg?.kind, targetS: tg?.s, afterS: ev.afterS ?? null, byPedal: true });
+    handleDriveEvent(ev, drive.lastObs);
+  }
+  renderObdDrive();
+}
+
+function onObdState(state, link) {
+  renderObdChip();
+  renderObdCard();
+  if (!drive.engine) return;
+  const t = Date.now() / 1000;
+  if (state === 'lost') {
+    drive.log?.event(t, 'obd', { state, error: link.error });
+    if (!obd.lostToast) toast('OBD-dosan tappade anslutningen. Fortsätter med GPS.', true);
+    obd.lostToast = true;
+  } else if (state === 'connected') {
+    drive.log?.event(t, 'obd', { state, protocol: link.session?.info.protocol, pedalPid: link.session?.info.pedalPid });
+    if (obd.lostToast) toast('OBD-dosan är ansluten igen.');
+    obd.lostToast = false;
+  }
+  renderObdDrive();
+}
+
+/** Ansluter till den sparade dosan vid körstart, om webbläsaren minns den. */
+async function autoConnectObd() {
+  const saved = store.obd;
+  if (!saved || !saved.auto || obdLink.state !== 'off') return;
+  const dev = obdLink.device && obdLink.device.id === saved.id ? obdLink.device : await knownDevice(saved.id);
+  if (dev) obdLink.connect(dev).catch(() => {});
+}
+
+/** Väljer dosa i Chromes lista (måste ske i en tryckning) och ansluter. */
+async function pickAndConnectObd() {
+  try {
+    const dev = await chooseDevice();
+    store.obd = { id: dev.id, name: dev.name || 'OBD-dosa', auto: store.obd?.auto ?? true };
+    obd.step = null;
+    await obdLink.connect(dev);
+  } catch (e) {
+    if (e.message !== 'Ingen dosa valdes.') toast(e.message, true);
+    renderObdCard();
+  }
+}
+
+function renderObdChip() {
+  const chip = $('d-obd');
+  if (!chip) return;
+  const st = obdLink.state;
+  chip.hidden = !store.obd || !!plan?.demo;
+  chip.className = 'obd-chip ' + ({ connected: 'on', lost: 'lost', connecting: 'busy', testing: 'busy' }[st] || '');
+  chip.setAttribute('aria-label', { connected: 'OBD-dosa ansluten', lost: 'OBD-dosan tappad, ansluter igen', connecting: 'Ansluter OBD-dosa', testing: 'Ansluter OBD-dosa' }[st] || 'Anslut OBD-dosa');
+}
+$('d-obd').addEventListener('click', () => {
+  const st = obdLink.state;
+  if (st === 'connected' || st === 'connecting' || st === 'testing') return;
+  if (obdLink.device) obdLink.connect(obdLink.device).catch(e => toast(e.message, true));
+  else pickAndConnectObd();
+});
+
+/** Pedalbågen, brickan och raden med varvtal i körvyn. */
+function renderObdDrive() {
+  if (!drive.engine) return;
+  const on = obdActive();
+  const s = obd.last;
+  $('d-ringwrap').classList.toggle('obd', on);
+  const arc = $('d-pedalarc');
+  arc.toggleAttribute('hidden', !on);
+  $('d-ebrake').hidden = !on || !(s.fuelCut ?? engineBraking(s));
+  $('d-ebrake').textContent = s?.fuelCut ? 'Bränsle av' : 'Motorbroms';
+  $('d-obdline').hidden = !on;
+  if (on) {
+    arc.classList.toggle('released', !!s.released);
+    const p = s.pedal ?? 0;
+    $('d-pedalfg').setAttribute('stroke-dasharray', `${p.toFixed(1)} 100`);
+    const parts = [];
+    if (s.rpm != null) parts.push(`<b>${Math.round(s.rpm).toLocaleString('sv-SE')}</b> rpm`);
+    if (s.pedal != null) parts.push(`gas <b>${Math.round(s.pedal)} %</b>`);
+    $('d-obdline').innerHTML = parts.join(' · ');
+  }
+  const b = drive.badge;
+  const badge = $('d-badge');
+  badge.hidden = !b || Date.now() > b.until;
+  if (b && !badge.hidden) { badge.textContent = b.text; badge.className = 'ring-badge' + (b.late ? ' late' : ''); }
+}
+
+const PROTOCOLS = {
+  1: 'SAE J1850 PWM', 2: 'SAE J1850 VPW', 3: 'ISO 9141-2', 4: 'ISO 14230-4 (KWP)', 5: 'ISO 14230-4 (KWP, snabb)',
+  6: 'CAN 11 bit, 500 kbit/s', 7: 'CAN 29 bit, 500 kbit/s', 8: 'CAN 11 bit, 250 kbit/s', 9: 'CAN 29 bit, 250 kbit/s', A: 'SAE J1939',
+};
+const protocolName = p => (p ? PROTOCOLS[p.replace(/^A(?=.)/, '').toUpperCase()] || p : '–');
+const PEDAL_NAME = { 0x5a: 'gaspedal (relativ)', 0x49: 'gaspedal', 0x45: 'gasspjäll (relativt)', 0x11: 'gasspjäll' };
+
+/** OBD-kortet under Inställningar. */
+function renderObdCard() {
+  if (!$('obd-card')) return;
+  const saved = store.obd;
+  const st = obdLink.state;
+  const info = obdLink.session?.info;
+  const busy = st === 'connecting' || st === 'testing';
+  const on = st === 'connected';
+  $('obd-card').classList.toggle('off', !saved && !busy && !on);
+  $('obd-dot').className = 'obd-dot ' + (on ? 'on' : busy || st === 'lost' ? 'busy' : '');
+  const name = saved?.name || obdLink.device?.name || 'OBD-dosa';
+  $('obd-title').textContent = on ? `${name} · ansluten`
+    : busy ? `${name} · ${st === 'testing' ? 'testar vad bilen redovisar…' : 'ansluter…'}`
+    : st === 'lost' ? `${name} · tappad, försöker igen`
+    : saved ? `${name} · inte ansluten` : 'Ingen dosa ansluten';
+  $('obd-sub').textContent = on ? obdRateText()
+    : obdLink.error && !busy ? obdLink.error
+    : saved ? 'Slå på tändningen och tryck på Anslut.'
+    : 'Med en OBD-dosa (Bluetooth 4.0/BLE) läser appen gaspedalen, farten och varvtalet direkt från bilen. Utan dosa används GPS som förut.';
+  $('obd-steps').hidden = !!saved || on || busy;
+
+  const test = $('obd-test');
+  test.hidden = !info && !busy;
+  if (!test.hidden) {
+    const sup = info?.supported || new Set();
+    const has = pid => sup.has(pid);
+    const rows = busy && !info?.supported?.size ? [['…', obd.step === 'protokoll' ? 'Letar bilens protokoll' : 'Startar dosan', '']] : [
+      ['yes', 'Dosa', info?.version || '–'],
+      ['yes', 'Protokoll', protocolName(info?.protocol)],
+      [has(0x0d) ? 'yes' : 'no', 'Fart', has(0x0d) ? 'finns' : 'saknas, GPS används'],
+      [has(0x0c) ? 'yes' : 'no', 'Varvtal', has(0x0c) ? 'finns' : 'saknas'],
+      [info?.pedalPid != null ? 'yes' : 'no', 'Gaspedal', info?.pedalPid != null ? PEDAL_NAME[info.pedalPid] : 'saknas, GPS används'],
+      [has(0x5e) || has(0x10) ? 'yes' : 'no', 'Bränsle', has(0x5e) ? 'bränsleflöde' : has(0x10) ? 'räknas ur luftflödet' : 'saknas'],
+      [has(0x03) ? 'yes' : 'no', 'Avstängt bränsle', has(0x03) ? 'syns' : 'syns inte, motorbroms uppskattas'],
+    ];
+    test.innerHTML = rows.map(([m, k, v]) => `<li><span class="mark ${m}">${m === 'yes' ? '✓' : m === 'no' ? '–' : '…'}</span><span>${esc(k)}</span><span class="v">${esc(v)}</span></li>`).join('');
+  }
+  $('obd-live').hidden = !on;
+  $('obd-auto-row').hidden = !saved;
+  $('obd-auto').checked = !!saved?.auto;
+  $('obd-connect').hidden = on || busy;
+  $('obd-connect').textContent = saved ? 'Anslut' : 'Anslut OBD-dosa';
+  $('obd-retest').hidden = !on;
+  $('obd-disconnect').hidden = !on && st !== 'lost';
+  $('obd-forget').hidden = !saved;
+  $('obd-hint').textContent = bleSupported()
+    ? 'Fungerar i Chrome på Android. Dosan ska inte parkopplas i telefonens Bluetooth-inställningar.'
+    : 'Den här webbläsaren saknar Bluetooth. Använd Chrome på Android.';
+  if (on) renderObdLive();
+}
+
+function obdRateText() {
+  const rate = obd.last?.rate;
+  return rate ? `${rate.toFixed(1).replace('.', ',')} avläsningar per sekund` : 'Läser…';
+}
+
+function renderObdLive() {
+  const s = obd.last;
+  if (!s || $('obd-live').hidden) return;
+  $('obd-sub').textContent = obdRateText();
+  $('obd-kmh').textContent = s.kmh != null ? `${Math.round(s.kmh)} km/h` : '–';
+  $('obd-rpm').textContent = s.rpm != null ? `${Math.round(s.rpm).toLocaleString('sv-SE')} rpm` : '–';
+  $('obd-pedal').textContent = s.pedal != null ? `${Math.round(s.pedal)} %` : '–';
+  const bar = $('obd-pedalbar');
+  bar.style.width = `${s.pedal ?? 0}%`;
+  bar.className = s.released ? 'released' : '';
+}
+
+$('obd-connect').addEventListener('click', () => {
+  if (obdLink.device && store.obd && obdLink.device.id === store.obd.id) {
+    obd.step = null;
+    obdLink.connect(obdLink.device).catch(() => renderObdCard());
+  } else pickAndConnectObd();
+});
+$('obd-retest').addEventListener('click', () => {
+  const dev = obdLink.device;
+  obdLink.disconnect();
+  obd.step = null;
+  if (dev) obdLink.connect(dev).catch(() => renderObdCard());
+});
+$('obd-disconnect').addEventListener('click', () => obdLink.disconnect());
+$('obd-forget').addEventListener('click', async () => {
+  const dev = obdLink.device;
+  obdLink.disconnect();
+  try { await dev?.forget?.(); } catch { /* stöds inte */ }
+  store.obd = null;
+  obd.last = null;
+  obdLink.session = null;
+  obdLink.error = null;
+  renderObdCard();
+});
+$('obd-auto').addEventListener('change', e => {
+  if (store.obd) store.obd = { ...store.obd, auto: e.target.checked };
+});
+
+/** Median av talen, eller null. */
+function median(xs) {
+  if (!xs.length) return null;
+  const s = xs.slice().sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function obdSummary() {
+  const r = (drive.reactions || []).filter(x => x.byPedal && x.afterS != null).map(x => x.afterS);
+  const km = (drive.engine?.stats.distance ?? 0) / 1000;
+  return {
+    reactMedianS: median(r),
+    fuelL: drive.fuelKnown ? drive.fuelL : null,
+    fuelPer100: drive.fuelKnown && km > 1 ? drive.fuelL / km * 100 : null,
+    ebrakeKm: drive.ebrakeM / 1000,
+    fuelCutKnown: drive.fuelCutKnown,
+  };
+}
+
+function obdStatRows() {
+  if (!drive.obdUsed) return [];
+  const o = obdSummary();
+  const n1 = x => x.toFixed(1).replace('.', ',');
+  const rows = [];
+  if (o.reactMedianS != null) rows.push([`${n1(o.reactMedianS)} s`, 'reaktionstid, median (gaspedal)']);
+  if (o.fuelL != null) rows.push([`${o.fuelL.toFixed(2).replace('.', ',')} l`, o.fuelPer100 != null ? `bränsle · ${n1(o.fuelPer100)} l/100 km` : 'bränsle']);
+  rows.push([`${n1(o.ebrakeKm)} km`, o.fuelCutKnown ? 'utan bränsle (motorbroms)' : 'med motorbroms']);
+  return rows;
+}
+
+/** Stapel per signal: tid till släppt gas, orange om sen eller inte släppt. */
+function renderReactionChart() {
+  const r = drive.reactions || [];
+  const show = drive.obdUsed && r.length > 0;
+  $('sum-obd').hidden = !show;
+  if (!show) return;
+  const max = Math.max(3, ...r.map(x => x.afterS ?? 0));
+  $('sum-react').innerHTML = r.map(x => {
+    const late = !x.followed || x.afterS == null || x.afterS > 2;
+    const h = x.followed && x.afterS != null ? Math.max(4, x.afterS / max * 100) : 100;
+    return `<i class="${late ? 'late' : ''}" style="height:${h.toFixed(0)}%"></i>`;
+  }).join('');
+  const ok = r.filter(x => x.followed && x.afterS != null && x.afterS <= 2).length;
+  $('sum-react').setAttribute('aria-label', `Gasen släppt inom 2 sekunder vid ${ok} av ${r.length} signaler`);
+}
+
 // ---------- Start ----------
 /**
  * Nyckel i länken (?key=… eller #key=…), t.ex. från en vän som delat appen.
@@ -1862,3 +2172,5 @@ if (!store.safetyAck || !store.onboarded) {
 
 // Gör det lättare att felsöka i konsolen.
 window.__bromsfri = { store, plan: () => plan, ApiError };
+
+
