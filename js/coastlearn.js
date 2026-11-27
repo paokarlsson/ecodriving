@@ -54,8 +54,9 @@ export class CoastLearner {
     if (this.acc.length >= 5 && this.acc.reduce((a, x) => a + x.mag, 0) / this.acc.length > COAST.brakeAccel) this.brakeT = t;
   }
 
-  /** p = {t, v (m/s), grade, acc (m), ok (på rutten, inte pausad)} */
+  /** p = {t, v (m/s), grade, acc (m), ok (på rutten, inte pausad), gas (gaspedalen nedtryckt enligt OBD)} */
   addGps(p) {
+    if (p.gas) return this.cut('gas');
     if (!p.ok || p.v == null || !Number.isFinite(p.v) || (p.acc != null && p.acc > COAST.maxAcc)) return this.cut('gps');
     const last = this.buf[this.buf.length - 1];
     if (last && p.t - last.t > COAST.maxGap) { const r = this.cut('lucka'); this.buf = [p]; return r; }

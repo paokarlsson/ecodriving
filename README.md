@@ -56,6 +56,18 @@ Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med ru
 - Den nya rutten börjar i färdriktningen (GPS-kursen, eller riktningen från en position minst 20 m bakåt), så att den inte vänder bilen. Hittar tjänsten ingen sådan rutt görs ett försök utan riktning.
 - Misslyckas omberäkningen (t.ex. utan täckning) försöker appen igen så länge bilen är utanför rutten, efter 5, 10, 20, 40 och sedan var 60:e sekund. Felet visas bara första gången.
 
+## OBD-dosa (frivillig)
+
+En ELM327-kompatibel dosa med Bluetooth 4.0/BLE (t.ex. Vgate iCar Pro BLE) kan anslutas under Inställningar → OBD-dosa. Det kräver Web Bluetooth, alltså Chrome på Android (eller Chrome/Edge på datorn); Safari på iPhone saknar det, och dosor med Bluetooth 3.0 eller Wi-Fi går inte att nå från en webbsida. Dosan ska inte parkopplas i telefonens Bluetooth-inställningar, den väljs i Chromes lista.
+
+- **Test vid anslutning:** dosan startas (`ATZ`, `ATE0`, `ATS0`, `ATSP0` …) och appen läser vilka värden bilen redovisar (`0100`, `0120`, `0140`). Kortet visar dosa, protokoll och om fart, varvtal, gaspedal, bränsle och avstängt bränsle finns. Det som saknas tas från GPS som förut.
+- **Gaspedalen** läses i första hand som relativ pedal (`5A`), annars pedal D (`49`), relativt gasspjäll (`45`) eller gasspjäll (`11`). Givarna visar sällan 0 utan fot, så viloläget lärs in som det lägsta värdet; gasen räknas som släppt under 3 % och nedtryckt över 8 %.
+- **I körvyn** visas pedalen som en båge i ringen (grön när gasen är släppt), varvtalet, och *Motorbroms* eller *Bränsle av* (bränslesystemets status `03` = 4 med släppt gas). När gasen släpps efter en signal visas *Gas släppt efter 0,6 s*. Med pedalen avgör den, inte GPS-farten, om signalen följdes, och en rullning avbryts när gasen trycks ned igen.
+- **Rullmodellen:** rullningar där pedalen visar att gasen var helt släppt hela tiden räknas även om de inte började vid en släpp-signal, och gas under rullningen avbryter mätningen.
+- **Sammanfattningen** visar reaktionstid (median), bränsle (bränsleflöde `5E`, annars beräknat ur luftflödet `10` för bensin), sträcka med motorbroms eller avstängt bränsle, och en stapel per signal med tiden till släppt gas.
+- Tappas anslutningen fortsätter appen med GPS och ansluter igen av sig själv (efter 3, 6, 12 … högst 30 s). Med *Anslut automatiskt när körningen startar* ansluter appen till den sparade dosan vid Starta om webbläsaren minns den (`getDevices`); annars ansluter man med OBD-knappen i körvyn.
+- Körloggen får fälten `pedal`, `rpm` och `obdKmh`, händelserna `obd` (ansluten/tappad) och `follow` med `byPedal`, och sammanfattningen `obd`. Rådatan får tabellen `obd` (`t, kmh, rpm, pedal, pedalRaw, maf, fuelLh, fuelCut`).
+
 ## Körlogg (JSON)
 
 Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställningar → Data → *Visa körloggar*, eller från sammanfattningen:
@@ -117,7 +129,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 
 ## Kända begränsningar (version 1)
 
-- Bilar som rullar i växel med motorbroms. Friläge, elbilar/hybrider med regenerering och OBD-II ingår inte.
+- Bilar som rullar i växel med motorbroms. Friläge och elbilar/hybrider med regenerering ingår inte.
 - Trafikljusens fas är okänd, så appen räknar alltid som om det är rött.
 - Stopp- och väjningsplikt-noder på korsande vägar kan ibland hamna på rutten om de ligger inom 10 m från den.
 - Följsamhet i sammanfattningen mäts med GPS-farten (fartminskning efter signalen), inte med accelerometern.

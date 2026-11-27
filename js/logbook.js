@@ -16,6 +16,9 @@ export const SAMPLE_FIELDS = [
   'side',   // sidokraft med tecken, positiv = trycker åt höger (g)
   'rel',    // meter kvar till släpp-signal (om nedräkning pågår)
   'alt',    // GPS-höjd (m)
+  'pedal',  // gaspedal (%, OBD)
+  'rpm',    // varvtal (OBD)
+  'obdKmh', // fart enligt bilen (km/h, OBD)
 ];
 
 const r = (x, d) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10 ** d) / 10 ** d);
@@ -46,6 +49,7 @@ export class DriveLog {
     this.rows.push([
       this.rel(t), r(p.s, 0), r(p.lat, 6), r(p.lon, 6), r(p.kmh, 1), r(p.acc, 0),
       p.mode ?? null, p.limit ?? null, r(p.g, 3), r(p.side, 3), r(p.rel, 0), r(p.alt, 1),
+      r(p.pedal, 0), r(p.rpm, 0), r(p.obdKmh, 0),
     ]);
   }
 
