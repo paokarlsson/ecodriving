@@ -62,10 +62,41 @@ test('lagring: spara, lista, läsa, radera och rensa äldsta när det är fullt'
   assert.equal(store.list().length, 2);
 
   // Litet utrymme: äldsta loggar får ge plats
-  const tiny = makeLogStore(memStorage(1_200_000), { max: 10 });
+  const tiny = makeLogStore(memStorage(1_000_000), { max: 10 });
   for (let i = 0; i < 6; i++) {
     const l = hourLog(); l.id += i; l.startedAt += i;
     assert.equal(tiny.save(l), true, `logg ${i}`);
   }
   assert.ok(tiny.list().length < 6);
+});
+
+test('alla fält sparas, tomma fält i slutet tas bort', () => {
+  const l = new DriveLog({ kind: 'drive' });
+  l.sample(0, { s: 1, kmh: 10, mode: 'free' });
+  l.sample(1, {
+    s: 2, kmh: 20, mode: 'approach', heading: 59.4, lonG: -0.031, coastAdj: 0.05,
+    pedal: 0, rpm: 1100, obdKmh: 20, pedalRaw: 14.9, gas: false, fuelLh: 0, maf: 3.21, fuelCut: true,
+  });
+  assert.equal(l.rows[0].length, 7);                    // slutar vid mode
+  const f = n => l.rows[1][SAMPLE_FIELDS.indexOf(n)];
+  assert.equal(l.rows[1].length, SAMPLE_FIELDS.length);
+  assert.equal(f('heading'), 59);
+  assert.equal(f('lonG'), -0.031);
+  assert.equal(f('coastAdj'), 0.05);
+  assert.equal(f('pedalRaw'), 14.9);
+  assert.equal(f('gas'), 0);
+  assert.equal(f('maf'), 3.2);
+  assert.equal(f('fuelCut'), 1);
+});
+
+test('kompakt: korta körningar får alla mätpunkter, långa behåller lägesbyten', () => {
+  const short = new DriveLog({ kind: 'drive' });
+  for (let t = 0; t < 300; t++) short.sample(t, { s: t, mode: 'free' });
+  assert.equal(short.toJSON().samples.rows.length, 300);
+  const long = new DriveLog({ kind: 'drive' });
+  for (let t = 0; t < 2000; t++) long.sample(t, { s: t, mode: t === 1001 ? 'approach' : 'free' });
+  const rows = long.toJSON().samples.rows;
+  assert.ok(rows.some(r => r[0] === 1001 && r[6] === 'approach'));
+  assert.ok(rows.some(r => r[0] === 1002));            // tillbaka till free
+  assert.ok(rows.length < 420);
 });

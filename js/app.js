@@ -1189,6 +1189,17 @@ function onDriveObs(obs) {
   while (drive.trail.length && obs.t - drive.trail[0].t > 30) drive.trail.shift();
 }
 
+/** OBD-värden för en mätpunkt i körloggen (tomt utan aktiv dosa). */
+function obdFields() {
+  if (!obdActive()) return {};
+  const o = obd.last;
+  return {
+    pedal: o.pedal, rpm: o.rpm, obdKmh: o.kmh, pedalRaw: o.pedalRaw,
+    gas: o.released == null ? null : !o.released,
+    fuelLh: o.fuelRate, maf: o.maf, fuelCut: o.fuelCut,
+  };
+}
+
 function logDrive(view, obs, events) {
   const L = drive.log;
   if (!L) return;
@@ -1198,7 +1209,8 @@ function logDrive(view, obs, events) {
     s: view.s, lat: obs.lat, lon: obs.lon, kmh: (obs.speed ?? view.v ?? 0) * 3.6, acc: obs.accuracy,
     mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, lonG: m?.lonG, rel: view.distToRelease, alt: obs.alt,
     coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
-    ...(obdActive() ? { pedal: obd.last.pedal, rpm: obd.last.rpm, obdKmh: obd.last.kmh } : {}),
+    heading: obs.heading,
+    ...obdFields(),
   });
   for (const ev of events) {
     const tg = ev.target;
@@ -1638,7 +1650,7 @@ function onRecGps(o) {
   learnAccFromGps(rec.meter, rec.last, o, rec.log);
   rec.last = o;
   const m = rec.meter.current();
-  rec.log.sample(o.t, { s: rec.dist, lat: o.lat, lon: o.lon, kmh: v * 3.6, acc: o.accuracy, mode: 'rec', g: m.g, side: m.side, alt: o.alt });
+  rec.log.sample(o.t, { s: rec.dist, lat: o.lat, lon: o.lon, kmh: v * 3.6, acc: o.accuracy, mode: 'rec', g: m.g, side: m.side, lonG: m.lonG, alt: o.alt, heading: o.heading, ...obdFields() });
   if (Date.now() - rec.savedAt > 30000) { logStore.save(rec.log); rec.savedAt = Date.now(); }
 }
 
@@ -1871,6 +1883,7 @@ function pedalReleasedBetween(t0, t1) {
 function onObdSample(s) {
   obd.last = s;
   if (!$('settings').hidden) renderObdLive();
+  if (rec.log) rec.raw?.addObd(s);
   if (!drive.engine) return;
   drive.obdUsed = true;
   drive.raw?.addObd(s);
@@ -1904,7 +1917,11 @@ function onObdState(state, link) {
     if (!obd.lostToast) toast('OBD-dosan tappade anslutningen. Fortsätter med GPS.', true);
     obd.lostToast = true;
   } else if (state === 'connected') {
-    drive.log?.event(t, 'obd', { state, protocol: link.session?.info.protocol, pedalPid: link.session?.info.pedalPid });
+    const info = link.session?.info;
+    drive.log?.event(t, 'obd', {
+      state, protocol: info?.protocol, pedalPid: info?.pedalPid, version: info?.version, fuelType: info?.fuelType,
+      pids: info ? [...info.supported].sort((a, b) => a - b).map(p => p.toString(16).padStart(2, '0')).join(',') : null,
+    });
     if (obd.lostToast) toast('OBD-dosan är ansluten igen.');
     obd.lostToast = false;
   }
