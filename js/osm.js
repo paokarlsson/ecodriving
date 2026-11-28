@@ -107,6 +107,78 @@ export function overpassQuery(cells) {
   return `[out:json][timeout:60];\n(\n${parts.join('\n')}\n);\nout geom qt;`;
 }
 
+/**
+ * Hela vägnätet i cellerna (alla körbara vägar, med eller utan gräns), för
+ * körning utan rutt där appen själv följer vägen framåt.
+ */
+export function networkQuery(cells) {
+  const parts = [];
+  for (const key of cells) {
+    const b = cellBounds(key);
+    const bb = `${b.s.toFixed(4)},${b.w.toFixed(4)},${b.n.toFixed(4)},${b.e.toFixed(4)}`;
+    parts.push(
+      `way[highway~"^(${DRIVABLE})$"](${bb});`,
+      `node[highway~"^(traffic_signals|stop|give_way|mini_roundabout)$"](${bb});`,
+    );
+  }
+  return `[out:json][timeout:60];\n(\n${parts.join('\n')}\n);\nout geom qt;`;
+}
+
+/** Cellerna inom radius meter från en punkt, närmast först. */
+export function cellsAround(lat, lon, radius) {
+  const dLat = radius / 111320;
+  const dLon = dLat / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+  const i0 = Math.floor((lat - dLat) / CELL_LAT), i1 = Math.floor((lat + dLat) / CELL_LAT);
+  const j0 = Math.floor((lon - dLon) / CELL_LON), j1 = Math.floor((lon + dLon) / CELL_LON);
+  const out = [];
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+    const b = cellBounds(cellKey(i, j));
+    const d = Math.hypot(((b.s + b.n) / 2 - lat) / CELL_LAT, ((b.w + b.e) / 2 - lon) / CELL_LON);
+    out.push({ key: cellKey(i, j), d });
+  }
+  return out.sort((a, b) => a.d - b.d).map(c => c.key);
+}
+
+/**
+ * Hämtar vägnätet för cellerna (från cachen om de finns där). Ger
+ * {elements, fetched: [nycklar], failed: [nycklar], error}.
+ */
+export async function fetchOsmNetwork(keys, { fetchImpl = fetch, signal, cache = null, firstRequest = 4, cellsPerRequest = 12, timeoutMs = 25000, hedgeMs = 4000, waits = [0, 3000] } = {}) {
+  const elements = new Map();
+  const missing = [];
+  for (const k of keys) {
+    const hit = cache && cache.get(k);
+    if (hit) for (const el of hit) elements.set(el.type + el.id, el);
+    else missing.push(k);
+  }
+  const fetched = [], failed = [];
+  let error = null;
+  // De närmaste cellerna först i ett litet anrop, så att vägen framåt kommer fort
+  const batches = [missing.slice(0, firstRequest)];
+  for (let b = firstRequest; b < missing.length; b += cellsPerRequest) batches.push(missing.slice(b, b + cellsPerRequest));
+  for (let b = 0; b < batches.length; b++) {
+    const batch = batches[b];
+    if (!batch.length) continue;
+    try {
+      const json = await overpassFetch(networkQuery(batch), { fetchImpl, signal, timeoutMs, hedgeMs, waits, first: b });
+      const wanted = new Set(batch);
+      const perCell = new Map(batch.map(k => [k, []]));
+      for (const raw of json.elements || []) {
+        const el = compactElement(raw);
+        elements.set(el.type + el.id, el);
+        for (const k of cellsOfElement(el, wanted)) perCell.get(k).push(el);
+      }
+      if (cache) for (const [k, els] of perCell) cache.set(k, els);
+      fetched.push(...batch);
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      failed.push(...batch);
+      error = e.message;
+    }
+  }
+  return { elements: [...elements.values()], fetched, failed, error };
+}
+
 /** Behåller bara det appen använder, så att svaret blir litet att spara. */
 export function compactElement(el) {
   const r6 = x => Math.round(x * 1e6) / 1e6;
@@ -117,8 +189,7 @@ export function compactElement(el) {
   for (const k of ['maxspeed', 'maxspeed:forward', 'maxspeed:backward', ...LIMIT_TAGS.slice(1)]) {
     if (el.tags?.[k]) tags[k] = el.tags[k];
   }
-  if (el.tags?.junction) tags.junction = el.tags.junction;
-  if (el.tags?.highway) tags.highway = el.tags.highway;
+  for (const k of ['junction', 'highway', 'oneway', 'name', 'ref']) if (el.tags?.[k]) tags[k] = el.tags[k];
   return { type: 'way', id: el.id, tags, geometry: (el.geometry || []).filter(Boolean).map(p => ({ lat: r6(p.lat), lon: r6(p.lon) })) };
 }
 
@@ -416,7 +487,7 @@ export const kindLabel = k => KIND_LABEL[k] || k;
 
 /**
  * Bygger den sorterade listan med fartmål {s (m), v (m/s), kind, label}.
- * settings: { aLat (m/s²), giveWayKmh, roundaboutKmh }
+ * settings: { aLat (m/s²), giveWayKmh, roundaboutKmh, noEnd, minTargetS (m), skipStart (m) }
  */
 export function buildTargets(route, elements, limits, settings) {
   const giveWay = (settings.giveWayKmh ?? 20) / 3.6;
@@ -441,9 +512,12 @@ export function buildTargets(route, elements, limits, settings) {
       }
     }
   }
-  t.push(...curveTargets(route, settings.aLat ?? 2.5, { limits }));
-  t.push({ s: route.length, v: 0, kind: 'end' });
-  return mergeTargets(t.filter(x => x.s > 40 || x.kind === 'end'));
+  const skipStart = settings.skipStart ?? 60;
+  t.push(...curveTargets(route, settings.aLat ?? 2.5, { limits, skipStart }));
+  // Utan resmål (vägen framåt) finns inget slutmål, och mål nära bilen behålls
+  if (!settings.noEnd) t.push({ s: route.length, v: 0, kind: 'end' });
+  const minS = settings.minTargetS ?? 40;
+  return mergeTargets(t.filter(x => x.s > minS || x.kind === 'end'));
 }
 
 /**

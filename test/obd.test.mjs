@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   responseLines, responseError, pidBytes, supportedFrom, decodePid, PedalTracker,
-  fuelRate, ElmSession, ObdPoller, engineBraking,
+  fuelRate, ElmSession, ObdPoller, engineBraking, decodeOther, pidName,
 } from '../js/obd.js';
 import { DriveEngine } from '../js/drive.js';
 import { buildRoute } from '../js/route.js';
@@ -72,6 +72,7 @@ function fakeElm({ pedal = 0x26, sup = '4100BE1FA813', sup40 = '414000800000' } 
     ATZ: 'ELM327 v2.3', ATE0: 'OK', ATL0: 'OK', ATS0: 'OK', ATH0: 'OK', ATAT1: 'OK', ATSP0: 'OK',
     ATI: 'ELM327 v2.3', ATDPN: 'A6', '0100': 'SEARCHING...\r' + sup, '0120': '412000000001', '0140': sup40,
     '010D': '410D3C', '010C': '410C1AF8', '0103': '41030200', '0110': '411001F4',
+    '0104': '410480', '0105': '41057B', '0106': '410690', '0101': '410100076500',
   };
   const t = {
     sent,
@@ -173,4 +174,36 @@ test('rullningsinlärningen avbryts när pedalen trycks ned', () => {
   const seg = cl.addGps({ t: 6, v: 22.6, grade: 0, acc: 5, ok: true, gas: true });
   assert.ok(seg);
   assert.equal(seg.end, 'gas');
+});
+
+test('övriga värden: avkodning, namn och hex för okända', () => {
+  assert.equal(decodeOther(0x05, pidBytes(['41057B'], 0x05)), 83);           // 123 − 40 °C
+  assert.equal(decodeOther(0x04, [0x80]), Math.round(128 * 100 / 255 * 1000) / 1000);
+  assert.equal(decodeOther(0x06, [0x90]), 12.5);                              // bränsletrim
+  assert.equal(decodeOther(0xa6, [0, 0x01, 0xe2, 0x40]), 12345.6);            // mätarställning km
+  assert.equal(decodeOther(0x01, [0x00, 0x07, 0x65, 0x00]), '00076500');      // statusbitar som hex
+  assert.equal(pidName(0x05), 'coolantC');
+  assert.equal(pidName(0xc3), 'pidC3');
+});
+
+test('slingan läser kylvätska, last och resten av det bilen redovisar', async () => {
+  const tr = fakeElm({ sup40: '414000800000' });
+  const s = new ElmSession(tr);
+  await s.init();
+  const samples = [];
+  let now = 1000;
+  const poller = new ObdPoller(s, x => { samples.push(x); if (samples.length >= 40) poller.stop(); }, { now: () => (now += 100) });
+  await poller.loop();
+  const last = samples[samples.length - 1];
+  assert.equal(last.coolant, 83);
+  assert.ok(Math.abs(last.load - 50.2) < 0.1);
+  assert.equal(last.other.stft1Pct, 12.5);
+  assert.equal(last.other.monitorStatus, '00076500');
+  const extras = samples.filter(x => x.extra).map(x => x.extra.name);
+  assert.ok(extras.length >= 8 && extras.length <= 20, `övriga ${extras.length}`);
+  // Pid som inte svarar hoppas över efter tre försök
+  const tries = tr.sent.filter(c => c === '0107').length;
+  assert.ok(tries <= 3, `0107 försökt ${tries} gånger`);
+  // Pedalen läses fortfarande varje varv
+  assert.equal(tr.sent.filter(c => c === '0149').length, 40);
 });

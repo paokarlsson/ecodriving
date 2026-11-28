@@ -1,11 +1,11 @@
 // Service worker: appens egna filer cachas så att den startar utan täckning.
 // API-anrop (rutt, höjd, Overpass) går alltid direkt mot nätet.
-const VERSION = 'bromsfri-v37';
+const VERSION = 'bromsfri-v39';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/app.js', 'js/api.js', 'js/audio.js', 'js/calibration.js', 'js/demo.js', 'js/drive.js',
   'js/geo.js', 'js/mapview.js', 'js/osm.js', 'js/physics.js', 'js/route.js', 'js/sensors.js',
-  'js/sim.js', 'js/store.js', 'js/lateral.js', 'js/logbook.js', 'js/coastlearn.js', 'js/rawstore.js', 'js/speedgraph.js', 'js/obd.js',
+  'js/sim.js', 'js/store.js', 'js/lateral.js', 'js/logbook.js', 'js/coastlearn.js', 'js/rawstore.js', 'js/speedgraph.js', 'js/obd.js', 'js/horizon.js', 'js/gasadvice.js',
 ];
 
 self.addEventListener('install', e => {

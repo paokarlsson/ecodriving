@@ -8,8 +8,12 @@ export const MOTION_FIELDS = ['t', 'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'alpha', 
 export const GPS_FIELDS = ['t', 'lat', 'lon', 'alt', 'acc', 'altAcc', 'speed', 'heading'];
 export const COMPASS_FIELDS = ['t', 'heading'];
 // OBD: kmh och rpm från bilen, pedal (%) och pedalRaw (givarens värde, %),
-// maf (g/s), fuelLh (l/h, beräknat om bilen inte ger det), fuelCut (1 = bränslet avstängt)
-export const OBD_FIELDS = ['t', 'kmh', 'rpm', 'pedal', 'pedalRaw', 'maf', 'fuelLh', 'fuelCut'];
+// maf (g/s), fuelLh (l/h, beräknat om bilen inte ger det), fuelCut (1 = bränslet avstängt),
+// released (1 = gasen räknas som släppt), fuelLhCar (l/h enligt bilen, om den ger det)
+export const OBD_FIELDS = ['t', 'kmh', 'rpm', 'pedal', 'pedalRaw', 'maf', 'fuelLh', 'fuelCut', 'released', 'fuelLhCar'];
+// Övriga OBD-värden, ett per avläsning: pid, avkodat värde (null om det saknas
+// avkodning) och svarets fyra första databytes (A–D)
+export const OBDX_FIELDS = ['t', 'pid', 'value', 'A', 'B', 'C', 'D'];
 
 const DB_NAME = 'bromsfri-raw';
 const STORE = 'chunks';
@@ -69,9 +73,9 @@ export class RawRecorder {
     this.logId = logId;
     this.sink = sink;
     this.t0 = null;
-    this.motion = []; this.gps = []; this.compass = []; this.obd = [];
+    this.motion = []; this.gps = []; this.compass = []; this.obd = []; this.obdx = [];
     this.seq = 0;
-    this.counts = { motion: 0, gps: 0, compass: 0, obd: 0, api: 0 };
+    this.counts = { motion: 0, gps: 0, compass: 0, obd: 0, obdx: 0, api: 0 };
     this.pending = Promise.resolve();
     this.error = null;
     this.timer = flushMs ? setInterval(() => this.flush(), flushMs) : null;
@@ -99,8 +103,16 @@ export class RawRecorder {
 
   /** s från ObdPoller: {t, kmh, rpm, pedal, pedalRaw, maf, fuelRate, fuelCut} */
   addObd(s) {
-    this.obd.push(this.rel(s.t), num(s.kmh), num(s.rpm), num(s.pedal), num(s.pedalRaw), num(s.maf), num(s.fuelRate), s.fuelCut == null ? NaN : s.fuelCut ? 1 : 0);
+    this.obd.push(this.rel(s.t), num(s.kmh), num(s.rpm), num(s.pedal), num(s.pedalRaw), num(s.maf), num(s.fuelRate), s.fuelCut == null ? NaN : s.fuelCut ? 1 : 0,
+      s.released == null ? NaN : s.released ? 1 : 0, num(s.fuelLh));
     this.counts.obd++;
+  }
+
+  /** Ett övrigt OBD-värde: x = {pid, value, bytes} från ObdPoller. */
+  addObdExtra(t, x) {
+    const b = x.bytes || [];
+    this.obdx.push(this.rel(t), x.pid, typeof x.value === 'number' ? x.value : NaN, num(b[0]), num(b[1]), num(b[2]), num(b[3]));
+    this.counts.obdx++;
   }
 
   /** Svar från API:erna (rutt, vägdata) – sparas som de är. */
@@ -114,6 +126,7 @@ export class RawRecorder {
     if (this.gps.length) { this.put({ kind: 'gps', data: Float64Array.from(this.gps) }); this.gps = []; }
     if (this.compass.length) { this.put({ kind: 'compass', data: Float32Array.from(this.compass) }); this.compass = []; }
     if (this.obd.length) { this.put({ kind: 'obd', data: Float32Array.from(this.obd) }); this.obd = []; }
+    if (this.obdx.length) { this.put({ kind: 'obdx', data: Float64Array.from(this.obdx) }); this.obdx = []; }
   }
 
   put(rec) {
@@ -158,6 +171,7 @@ export async function readRaw(logId, { sink = idbSink } = {}) {
     gps: { fields: GPS_FIELDS, rows: gpsRows },
     compass: { fields: COMPASS_FIELDS, rows: toRows(by('compass'), COMPASS_FIELDS.length, 2) },
     obd: { fields: OBD_FIELDS, rows: toRows(by('obd'), OBD_FIELDS.length, 2) },
+    obdx: { fields: OBDX_FIELDS, rows: toRows(by('obdx'), OBDX_FIELDS.length, 3) },
     api: by('api').map(c => ({ kind: c.api, at: c.at, data: c.data })),
   };
 }

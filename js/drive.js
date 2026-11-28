@@ -1,7 +1,7 @@
 // Körmotor: kartmatchning, val av styrande fartmål, släpp-signal och statistik.
 // Ren logik utan DOM: matas med GPS-observationer, ger tillstånd och händelser.
 import { matchToRoute, gradeAt, headingAt } from './route.js';
-import { angleDiff, headingXY, makeProjector } from './geo.js';
+import { angleDiff, headingXY, makeProjector, haversine } from './geo.js';
 import { releasePoint } from './physics.js';
 
 export const DRIVE = {
@@ -31,6 +31,8 @@ export class DriveEngine {
     this.targets = targets;
     this.model = model;
     this.marginS = settings.marginS ?? 1.5;
+    // Utan resmål (körning utan rutt): rutten är vägen framåt och tar aldrig slut
+    this.endless = !!settings.endless;
     this.sHint = null;
     this.s = 0;
     this.lastT = null;
@@ -77,7 +79,7 @@ export class DriveEngine {
     const s = m.s;
     let v = obs.speed;
     if (v == null || !Number.isFinite(v) || v < 0) {
-      v = (this.lastT != null && t > this.lastT) ? Math.max(0, (s - this.lastS) / (t - this.lastT)) : this.v;
+      v = (this.lastT != null && this.lastS != null && t > this.lastT) ? Math.max(0, (s - this.lastS) / (t - this.lastT)) : this.v;
     }
     if (this.lastS != null && s > this.lastS) this.stats.distance += s - this.lastS;
     this.sHint = s; this.s = s; this.v = v; this.lastT = t; this.lastS = s;
@@ -99,7 +101,7 @@ export class DriveEngine {
     this.pending = this.pending.filter(p => !p.done);
 
     // 4. Framme?
-    if (s >= this.route.length - DRIVE.arriveDist) {
+    if (!this.endless && s >= this.route.length - DRIVE.arriveDist) {
       this.arrived = true;
       this.stats.endT = t;
       events.push({ type: 'arrived', stats: { ...this.stats } });
@@ -200,6 +202,29 @@ export class DriveEngine {
     this.fired = new Set();
     for (const t of targets) {
       if (old.some(o => Math.abs(o.s - t.s) < 40) || (this.coast && Math.abs(this.coast.target.s - t.s) < 40)) this.fired.add(t.id);
+    }
+  }
+
+  /**
+   * Ny rutt under körning utan att börja om (vägen framåt utan rutt). Målen
+   * har lat/lon, så ett mål som redan har gett signal känns igen på platsen
+   * (samma slag inom 40 m) och signaleras inte igen, och en pågående rullning
+   * fortsätter mot samma mål.
+   */
+  setRoute(route, targets) {
+    const same = (a, b) => a.kind === b.kind && a.lat != null && b.lat != null
+      && haversine(a.lat, a.lon, b.lat, b.lon) < 40;
+    const old = this.targets.filter(t => this.fired.has(t.id));
+    this.route = route;
+    this.targets = targets;
+    this.fired = new Set(targets.filter(t => old.some(o => same(o, t))).map(t => t.id));
+    this.sHint = null;
+    this.lastS = null;
+    this.offSince = null;
+    if (this.paused === 'offroute') this.paused = null;
+    if (this.coast) {
+      const t = targets.find(x => same(x, this.coast.target));
+      if (t) { this.coast.target = t; this.fired.add(t.id); } else this.coast = null;
     }
   }
 
