@@ -93,6 +93,97 @@ export function decodePid(pid, b) {
   }
 }
 
+// Övriga värden i mode 01 (SAE J1979): namn i loggen och avkodning.
+// A, B, C, D = databytes. Värden utan avkodning sparas som hex.
+const u16 = (A, B) => A * 256 + B;
+const trim = A => (A - 128) * 100 / 128;
+export const PID_INFO = {
+  0x01: ['monitorStatus', null], 0x02: ['freezeDtc', null],
+  0x04: ['loadPct', A => A * 100 / 255],
+  0x05: ['coolantC', A => A - 40],
+  0x06: ['stft1Pct', trim], 0x07: ['ltft1Pct', trim], 0x08: ['stft2Pct', trim], 0x09: ['ltft2Pct', trim],
+  0x0a: ['fuelPressKpa', A => 3 * A],
+  0x0b: ['mapKpa', A => A],
+  0x0e: ['timingDeg', A => A / 2 - 64],
+  0x0f: ['intakeC', A => A - 40],
+  0x11: ['throttlePct', A => A * 100 / 255],
+  0x12: ['secAirStatus', null], 0x13: ['o2Present', null],
+  0x14: ['o2s1V', A => A / 200], 0x15: ['o2s2V', A => A / 200], 0x16: ['o2s3V', A => A / 200], 0x17: ['o2s4V', A => A / 200],
+  0x18: ['o2s5V', A => A / 200], 0x19: ['o2s6V', A => A / 200], 0x1a: ['o2s7V', A => A / 200], 0x1b: ['o2s8V', A => A / 200],
+  0x1c: ['obdStandard', A => A], 0x1d: ['o2Present4', null], 0x1e: ['auxInput', null],
+  0x1f: ['runTimeS', u16],
+  0x21: ['milDistKm', u16],
+  0x22: ['railPressKpa', (A, B) => u16(A, B) * 0.079],
+  0x23: ['railGaugeKpa', (A, B) => u16(A, B) * 10],
+  0x24: ['lambda1', (A, B) => u16(A, B) * 2 / 65536], 0x25: ['lambda2', (A, B) => u16(A, B) * 2 / 65536],
+  0x26: ['lambda3', (A, B) => u16(A, B) * 2 / 65536], 0x27: ['lambda4', (A, B) => u16(A, B) * 2 / 65536],
+  0x28: ['lambda5', (A, B) => u16(A, B) * 2 / 65536], 0x29: ['lambda6', (A, B) => u16(A, B) * 2 / 65536],
+  0x2a: ['lambda7', (A, B) => u16(A, B) * 2 / 65536], 0x2b: ['lambda8', (A, B) => u16(A, B) * 2 / 65536],
+  0x2c: ['egrCmdPct', A => A * 100 / 255],
+  0x2d: ['egrErrPct', trim],
+  0x2e: ['evapPurgePct', A => A * 100 / 255],
+  0x2f: ['fuelLevelPct', A => A * 100 / 255],
+  0x30: ['warmups', A => A],
+  0x31: ['clearedDistKm', u16],
+  0x32: ['evapPressPa', (A, B) => ((A * 256 + B) << 16 >> 16) / 4],
+  0x33: ['baroKpa', A => A],
+  0x34: ['lambdaI1', (A, B) => u16(A, B) * 2 / 65536], 0x35: ['lambdaI2', (A, B) => u16(A, B) * 2 / 65536],
+  0x36: ['lambdaI3', (A, B) => u16(A, B) * 2 / 65536], 0x37: ['lambdaI4', (A, B) => u16(A, B) * 2 / 65536],
+  0x38: ['lambdaI5', (A, B) => u16(A, B) * 2 / 65536], 0x39: ['lambdaI6', (A, B) => u16(A, B) * 2 / 65536],
+  0x3a: ['lambdaI7', (A, B) => u16(A, B) * 2 / 65536], 0x3b: ['lambdaI8', (A, B) => u16(A, B) * 2 / 65536],
+  0x3c: ['catB1S1C', (A, B) => u16(A, B) / 10 - 40], 0x3d: ['catB2S1C', (A, B) => u16(A, B) / 10 - 40],
+  0x3e: ['catB1S2C', (A, B) => u16(A, B) / 10 - 40], 0x3f: ['catB2S2C', (A, B) => u16(A, B) / 10 - 40],
+  0x41: ['monitorDrive', null],
+  0x42: ['moduleV', (A, B) => u16(A, B) / 1000],
+  0x43: ['absLoadPct', (A, B) => u16(A, B) * 100 / 255],
+  0x44: ['lambdaCmd', (A, B) => u16(A, B) * 2 / 65536],
+  0x45: ['relThrottlePct', A => A * 100 / 255],
+  0x46: ['ambientC', A => A - 40],
+  0x47: ['throttleBPct', A => A * 100 / 255], 0x48: ['throttleCPct', A => A * 100 / 255],
+  0x49: ['pedalDPct', A => A * 100 / 255], 0x4a: ['pedalEPct', A => A * 100 / 255], 0x4b: ['pedalFPct', A => A * 100 / 255],
+  0x4c: ['throttleCmdPct', A => A * 100 / 255],
+  0x4d: ['milTimeMin', u16], 0x4e: ['clearedTimeMin', u16],
+  0x50: ['maxMafGs', A => A * 10],
+  0x51: ['fuelType', A => A],
+  0x52: ['ethanolPct', A => A * 100 / 255],
+  0x53: ['evapAbsKpa', (A, B) => u16(A, B) / 200],
+  0x54: ['evapPressPa2', (A, B) => (A * 256 + B) << 16 >> 16],
+  0x55: ['st2ndO2b1Pct', trim], 0x56: ['lt2ndO2b1Pct', trim], 0x57: ['st2ndO2b2Pct', trim], 0x58: ['lt2ndO2b2Pct', trim],
+  0x59: ['railAbsKpa', (A, B) => u16(A, B) * 10],
+  0x5a: ['relPedalPct', A => A * 100 / 255],
+  0x5b: ['hybridBattPct', A => A * 100 / 255],
+  0x5c: ['oilC', A => A - 40],
+  0x5d: ['injTimingDeg', (A, B) => u16(A, B) / 128 - 210],
+  0x5e: ['fuelRateLh', (A, B) => u16(A, B) / 20],
+  0x5f: ['emissionStd', A => A],
+  0x61: ['torqueDemandPct', A => A - 125],
+  0x62: ['torqueActualPct', A => A - 125],
+  0x63: ['torqueRefNm', u16],
+  0x67: ['coolant2C', (A, B, C) => B - 40],
+  0x68: ['intake2C', (A, B, C) => B - 40],
+  0x8e: ['frictionTorquePct', A => A - 125],
+  0xa2: ['cylFuelMg', (A, B) => u16(A, B) / 32],
+  0xa4: ['gear', (A, B) => (A & 2 ? (B >> 4) : null)],
+  0xa6: ['odometerKm', (A, B, C, D) => ((A * 2 ** 24) + (B << 16) + (C << 8) + D) / 10],
+};
+
+/** Namnet för en pid i loggen. */
+export const pidName = pid => PID_INFO[pid]?.[0] ?? `pid${hex2(pid)}`;
+
+/** Övrigt värde: avkodat tal, eller databytes som hex om det saknas avkodning. */
+export function decodeOther(pid, b) {
+  if (!b || !b.length) return null;
+  const f = PID_INFO[pid]?.[1];
+  if (f) {
+    const v = f(b[0], b[1] ?? 0, b[2] ?? 0, b[3] ?? 0);
+    if (v != null && Number.isFinite(v)) return Math.round(v * 1000) / 1000;
+  }
+  return b.map(hex2).join('');
+}
+
+/** Pid som är listor över pid (0x00, 0x20 …) och därför inte är värden. */
+const isSupportPid = pid => pid % 0x20 === 0;
+
 /**
  * Gaspedalen i procent av vägen. Pedal- och gasspjällsgivare visar sällan 0
  * när foten är borta, så viloläget lärs in som det lägsta värdet som setts.
@@ -184,7 +275,7 @@ export class ElmSession {
     if (err) throw new Error(err === 'UNABLE TO CONNECT' || err === 'NO DATA'
       ? 'Bilen svarar inte. Är tändningen på?' : `Bilen svarade med fel (${err})`);
     const sup = supportedFrom(l0, 0x00);
-    for (const base of [0x20, 0x40]) {
+    for (const base of [0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0]) {
       if (!sup.has(base)) break;
       try { for (const p of supportedFrom(await this.send('01' + hex2(base)), base)) sup.add(p); }
       catch { break; }
@@ -204,12 +295,19 @@ export class ElmSession {
     const lines = await this.send('01' + hex2(pid));
     return decodePid(pid, pidBytes(lines, pid));
   }
+
+  /** Läser en pid som rå databytes; null om bilen inte svarar. */
+  async readBytes(pid) {
+    return pidBytes(await this.send('01' + hex2(pid)), pid);
+  }
 }
 
 /**
  * Läser bilen i en slinga: gaspedal, fart och varvtal varje varv,
- * bränsleuppgifterna var slowEvery:e. onSample får {t, kmh, rpm, pedalRaw,
- * pedal, released, maf, fuelLh, fuelCut, fuelRate, rate}.
+ * bränsleuppgifterna var slowEvery:e och ett övrigt värde varannan varv.
+ * onSample får {t, kmh, rpm, pedalRaw, pedal, released, maf, fuelLh, fuelCut,
+ * fuelRate, rate, coolant, load, other: {namn: senaste värde}, extra: det
+ * övriga värde som lästes detta varv {pid, name, value, bytes} eller null}.
  */
 export class ObdPoller {
   constructor(session, onSample, { now = () => Date.now() } = {}) {
@@ -220,6 +318,40 @@ export class ObdPoller {
     this.pedal = new PedalTracker({ pid: session.info.pedalPid ?? 0x5a });
     this.state = { maf: null, fuelLh: null, fuelCut: null };
     this.times = [];
+    // Övriga värden: allt bilen redovisar som inte redan läses. Kylvätska och
+    // last varannan gång, resten i tur och ordning.
+    const sup = session.info.supported || new Set();
+    const fast = new Set([session.info.pedalPid, 0x0d, 0x0c, 0x03, 0x5e, 0x10]);
+    this.prio = [0x04, 0x05].filter(p => sup.has(p) && !fast.has(p));
+    this.rest = [...sup].filter(p => !isSupportPid(p) && !fast.has(p) && !this.prio.includes(p)).sort((a, b) => a - b);
+    this.other = {};         // namn → senaste värde
+    this.otherT = {};        // namn → tid (ms)
+    this.fails = new Map();  // pid → antal tomma svar i rad
+    this.turn = 0;
+  }
+
+  /** Nästa övriga pid att läsa, eller null. */
+  nextOther() {
+    const ok = p => (this.fails.get(p) || 0) < 3;
+    const prio = this.prio.filter(ok), rest = this.rest.filter(ok);
+    if (!prio.length && !rest.length) return null;
+    this.turn++;
+    if (prio.length && (this.turn % 2 === 0 || !rest.length)) return prio[(this.turn >> 1) % prio.length];
+    return rest[(this.turn >> 1) % rest.length] ?? prio[0];
+  }
+
+  /** Läser en övrig pid; tre tomma svar i rad och den hoppas över. */
+  async readOther(t) {
+    const pid = this.nextOther();
+    if (pid == null) return null;
+    const b = await this.s.readBytes(pid);
+    if (!b) { this.fails.set(pid, (this.fails.get(pid) || 0) + 1); return null; }
+    this.fails.set(pid, 0);
+    const value = decodeOther(pid, b);
+    const name = pidName(pid);
+    this.other[name] = value;
+    this.otherT[name] = t;
+    return { pid, name, value, bytes: b };
   }
 
   async loop() {
@@ -232,6 +364,8 @@ export class ObdPoller {
         const pedalRaw = pedalPid != null ? await this.s.read(pedalPid) : null;
         const kmh = sup.has(0x0d) ? await this.s.read(0x0d) : null;
         const rpm = sup.has(0x0c) ? await this.s.read(0x0c) : null;
+        // Ett övrigt värde varannan varv, så att pedalen fortfarande läses ofta
+        const extra = n % 2 === 1 ? await this.readOther(this.now()) : null;
         if (n % OBD.slowEvery === 0) {
           if (sup.has(0x03)) { const st = await this.s.read(0x03); this.state.fuelCut = st == null ? null : st === 4; }
           if (sup.has(0x5e)) this.state.fuelLh = await this.s.read(0x5e);
@@ -252,6 +386,8 @@ export class ObdPoller {
           maf: this.state.maf, fuelLh: this.state.fuelLh, fuelCut,
           fuelRate: fuelRate({ fuelLh: this.state.fuelLh, maf: this.state.maf, fuelCut, fuelType: this.s.info.fuelType }),
           rate,
+          coolant: this.other.coolantC ?? null, load: this.other.loadPct ?? null,
+          other: this.other, extra,
         });
       } catch (e) {
         if (!this.running) break;

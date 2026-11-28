@@ -30,7 +30,11 @@ export const SAMPLE_FIELDS = [
   'gasRec', // rekommenderat gaspådrag (%, OBD)
   'gasLo', 'gasHi', // rekommendationens gränser (%)
   'gasKind', // release | hold | accel
+  'coolant', // kylvätsketemperatur (°C, OBD)
+  'load',   // motorlast (%, OBD)
+  'other',  // övriga OBD-värden som lästs sedan förra mätpunkten {namn: värde}
 ];
+const OTHER = SAMPLE_FIELDS.indexOf('other');
 
 /** Kompakt export: alla mätpunkter för körningar upp till så här många sekunder. */
 export const COMPACT_ALL_ROWS = 900;
@@ -56,9 +60,9 @@ export class DriveLog {
     return r(t - this.t0, 1);
   }
 
-  /** Högst en mätpunkt per sekund. */
+  /** Högst en mätpunkt per sekund. Ger true om mätpunkten sparades. */
   sample(t, p) {
-    if (t - this.lastSampleT < 0.95) return;
+    if (t - this.lastSampleT < 0.95) return false;
     this.lastSampleT = t;
     const bit = x => (x == null ? null : x ? 1 : 0);
     const row = [
@@ -68,10 +72,12 @@ export class DriveLog {
       r(p.heading, 0), r(p.lonG, 3), r(p.coastAdj, 3), r(p.pedalRaw, 1), bit(p.gas),
       r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut), r(p.gasRec, 0),
       r(p.gasLo, 0), r(p.gasHi, 0), p.gasKind ?? null,
+      r(p.coolant, 0), r(p.load, 1), p.other && Object.keys(p.other).length ? { ...p.other } : null,
     ];
     // Tomma fält i slutet tas bort (saknas = null), så loggen utan OBD blir inte större.
     while (row.length > 1 && row[row.length - 1] == null) row.pop();
     this.rows.push(row);
+    return true;
   }
 
   event(t, type, data = {}) {
@@ -91,8 +97,25 @@ export class DriveLog {
   toJSON({ full = false } = {}) {
     const all = full || this.rows.length <= COMPACT_ALL_ROWS;
     const every = all ? 1 : 5;
-    const rows = all ? this.rows : this.rows.filter((row, i, a) =>
-      i % every === 0 || i === a.length - 1 || (i > 0 && row[6] !== a[i - 1][6]));
+    let rows = this.rows;
+    if (!all) {
+      // Övriga OBD-värden från överhoppade mätpunkter följer med nästa som behålls
+      rows = [];
+      let carry = null;
+      this.rows.forEach((row, i, a) => {
+        const o = row[OTHER];
+        if (o) carry = { ...(carry || {}), ...o };
+        if (i % every === 0 || i === a.length - 1 || (i > 0 && row[6] !== a[i - 1][6])) {
+          if (carry) {
+            const out = row.slice();
+            while (out.length <= OTHER) out.push(null);
+            out[OTHER] = carry;
+            rows.push(out);
+          } else rows.push(row);
+          carry = null;
+        }
+      });
+    }
     return {
       app: 'bromsfri-korning',
       version: LOG_VERSION,

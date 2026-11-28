@@ -25,7 +25,7 @@ test('rådata sparas i block och läses tillbaka som tabeller', async () => {
   rec.addCompass(t0 + 0.5, 271.3);
   rec.addApi('route', { coords: [[14.7, 63.1, 300]], distance: 1000 });
   const counts = await rec.close();
-  assert.deepEqual({ ...counts, error: undefined }, { motion: 120, gps: 1, compass: 1, obd: 0, api: 1, error: undefined });
+  assert.deepEqual({ ...counts, error: undefined }, { motion: 120, gps: 1, compass: 1, obd: 0, obdx: 0, api: 1, error: undefined });
   const raw = await readRaw('logg-1', { sink });
   assert.deepEqual(raw.motion.fields, MOTION_FIELDS);
   assert.equal(raw.motion.rows.length, 120);

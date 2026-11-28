@@ -417,3 +417,9 @@ h2 { font-size: 1.05rem; margin: 0 0 6px; }
 .gashint { text-align: center; font-size: .8rem; color: var(--muted); font-weight: 600; margin-top: 2px; }
 .rec-dot.small { display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: 1px; }
 #free-btn { margin: 10px 0 4px; width: 100%; }
+
+.obd-other { grid-column: span 2; background: var(--bg); border-radius: 10px; padding: 8px 12px; }
+.obd-other summary { font-size: .85rem; font-weight: 700; color: var(--muted); cursor: pointer; }
+.obd-other dl { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; margin: 6px 0 0; font-size: .85rem; }
+.obd-other dt { color: var(--muted); overflow-wrap: anywhere; }
+.obd-other dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }

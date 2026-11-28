@@ -1,6 +1,6 @@
 // Service worker: appens egna filer cachas så att den startar utan täckning.
 // API-anrop (rutt, höjd, Overpass) går alltid direkt mot nätet.
-const VERSION = 'bromsfri-v38';
+const VERSION = 'bromsfri-v39';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/app.js', 'js/api.js', 'js/audio.js', 'js/calibration.js', 'js/demo.js', 'js/drive.js',

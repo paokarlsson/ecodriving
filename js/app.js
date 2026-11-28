@@ -1448,6 +1448,7 @@ function obdFields() {
   if (!obdActive()) return {};
   const o = obd.last;
   return {
+    coolant: o.coolant, load: o.load,
     pedal: o.pedal, rpm: o.rpm, obdKmh: o.kmh, pedalRaw: o.pedalRaw,
     gas: o.released == null ? null : !o.released,
     fuelLh: o.fuelRate, maf: o.maf, fuelCut: o.fuelCut,
@@ -1459,14 +1460,16 @@ function logDrive(view, obs, events) {
   if (!L) return;
   const i = Math.min(plan.route.n - 1, Math.max(0, Math.round((view.s || 0) / plan.route.step)));
   const m = drive.meter ? drive.meter.current() : null;
-  L.sample(obs.t, {
+  const wrote = L.sample(obs.t, {
     s: view.s, lat: obs.lat, lon: obs.lon, kmh: (obs.speed ?? view.v ?? 0) * 3.6, acc: obs.accuracy,
     mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, lonG: m?.lonG, rel: view.distToRelease, alt: obs.alt,
     coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
     heading: obs.heading,
     ...obdFields(),
     ...gasFields(),
+    other: drive.obdOther,
   });
+  if (wrote) drive.obdOther = null;
   for (const ev of events) {
     const tg = ev.target;
     const at = { s: view.s, kmh: (view.v || 0) * 3.6 };
@@ -2035,6 +2038,7 @@ function obdActive() {
 }
 
 function resetDriveObd() {
+  drive.obdOther = null;
   drive.reactions = [];
   drive.badge = null;
   drive.obdUsed = false;
@@ -2065,6 +2069,10 @@ function onObdSample(s) {
   if (!drive.engine) return;
   drive.obdUsed = true;
   drive.raw?.addObd(s);
+  if (s.extra) {
+    drive.raw?.addObdExtra(s.t, s.extra);
+    drive.obdOther = { ...(drive.obdOther || {}), [s.extra.name]: s.extra.value };
+  }
   gasObd(s);
   // Dosans tid räknas om till GPS-tidens skala (positionernas tidsstämplar)
   const t = obsTime(s.t);
@@ -2161,6 +2169,8 @@ function renderObdDrive() {
     const parts = [];
     if (s.rpm != null) parts.push(`<b>${Math.round(s.rpm).toLocaleString('sv-SE')}</b> rpm`);
     if (s.pedal != null) parts.push(`gas <b>${Math.round(s.pedal)} %</b>`);
+    if (s.load != null) parts.push(`last <b>${Math.round(s.load)} %</b>`);
+    if (s.coolant != null) parts.push(`<b>${Math.round(s.coolant)} °C</b>`);
     $('d-obdline').innerHTML = parts.join(' · ');
   }
   renderGas();
@@ -2243,6 +2253,13 @@ function renderObdLive() {
   const bar = $('obd-pedalbar');
   bar.style.width = `${s.pedal ?? 0}%`;
   bar.className = s.released ? 'released' : '';
+  $('obd-coolant').textContent = s.coolant != null ? `${Math.round(s.coolant)} °C` : '–';
+  $('obd-load').textContent = s.load != null ? `${Math.round(s.load)} %` : '–';
+  const other = Object.entries(s.other || {}).filter(([k]) => k !== 'coolantC' && k !== 'loadPct').sort(([a], [b]) => a.localeCompare(b));
+  $('obd-other-n').textContent = other.length ? `(${other.length} värden)` : '(läses…)';
+  if ($('obd-other-box').open) {
+    $('obd-other').innerHTML = other.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === 'number' ? v.toLocaleString('sv-SE', { maximumFractionDigits: 2 }) : v)}</dd>`).join('');
+  }
 }
 
 $('obd-connect').addEventListener('click', () => {

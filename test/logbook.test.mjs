@@ -75,7 +75,7 @@ test('alla fält sparas, tomma fält i slutet tas bort', () => {
   l.sample(0, { s: 1, kmh: 10, mode: 'free' });
   l.sample(1, {
     s: 2, kmh: 20, mode: 'approach', heading: 59.4, lonG: -0.031, coastAdj: 0.05,
-    pedal: 0, rpm: 1100, obdKmh: 20, pedalRaw: 14.9, gas: false, fuelLh: 0, maf: 3.21, fuelCut: true, gasRec: 12.4, gasLo: 9.4, gasHi: 15.4, gasKind: 'hold',
+    pedal: 0, rpm: 1100, obdKmh: 20, pedalRaw: 14.9, gas: false, fuelLh: 0, maf: 3.21, fuelCut: true, gasRec: 12.4, gasLo: 9.4, gasHi: 15.4, gasKind: 'hold', coolant: 82.4, load: 31.25, other: { oilC: 88 },
   });
   assert.equal(l.rows[0].length, 7);                    // slutar vid mode
   const f = n => l.rows[1][SAMPLE_FIELDS.indexOf(n)];
@@ -101,4 +101,17 @@ test('kompakt: korta körningar får alla mätpunkter, långa behåller lägesby
   assert.ok(rows.some(r => r[0] === 1001 && r[6] === 'approach'));
   assert.ok(rows.some(r => r[0] === 1002));            // tillbaka till free
   assert.ok(rows.length < 420);
+});
+
+test('övriga OBD-värden följer med till nästa mätpunkt i kompakt logg', () => {
+  const l = new DriveLog({ kind: 'drive' });
+  for (let t = 0; t < 1000; t++) l.sample(t, { s: t, mode: 'free', coolant: 80, load: 30, other: t === 3 ? { oilC: 90 } : t === 7 ? { baroKpa: 99 } : null });
+  const full = l.toJSON({ full: true }).samples;
+  const oi = full.fields.indexOf('other');
+  assert.deepEqual(full.rows[3][oi], { oilC: 90 });
+  assert.equal(full.rows[4][oi], undefined);              // tomt fält i slutet utelämnas
+  const rows = l.toJSON().samples.rows;
+  assert.deepEqual(rows[1][oi], { oilC: 90 });            // t = 5
+  assert.deepEqual(rows[2][oi], { baroKpa: 99 });         // t = 10
+  assert.equal(rows[1][full.fields.indexOf('coolant')], 80);
 });
