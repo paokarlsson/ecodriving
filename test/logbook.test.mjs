@@ -87,7 +87,7 @@ test('alla fält sparas, tomma fält i slutet tas bort', () => {
   assert.equal(f('gas'), 0);
   assert.equal(f('maf'), 3.2);
   assert.equal(f('fuelCut'), 1);
-  assert.equal(f('gasRec'), 12);
+  assert.equal(f('gasRec'), 12.4);
   assert.equal(f('gasKind'), 'hold');
 });
 

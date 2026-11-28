@@ -27,11 +27,14 @@ export const SAMPLE_FIELDS = [
   'fuelLh', // bränsleflöde (l/h, OBD, beräknat ur luftflödet om bilen inte ger det)
   'maf',    // luftflöde (g/s, OBD)
   'fuelCut', // 1 = bränslet avstängt (motorbroms), 0 = inte (OBD)
-  'gasRec', // rekommenderat gaspådrag (%, OBD)
-  'gasLo', 'gasHi', // rekommendationens gränser (%)
+  'gasRec', // rekommenderat gaspådrag (pedal i % eller bränsleflöde i l/h, se gasUnit)
+  'gasLo', 'gasHi', // rekommendationens gränser
   'gasKind', // release | hold | accel
   'coolant', // kylvätsketemperatur (°C, OBD)
   'load',   // motorlast (%, OBD)
+  'cruise', // 1 = farthållaren drar (gasen släppt men bränsle som vid gaspådrag, OBD)
+  'fuelL100', // momentan förbrukning (l/100 km, utjämnad över några sekunder, OBD)
+  'gasUnit', // lh = gasrådet i bränsleflöde (l/h), pct = i pedal (%)
   'other',  // övriga OBD-värden som lästs sedan förra mätpunkten {namn: värde}
 ];
 const OTHER = SAMPLE_FIELDS.indexOf('other');
@@ -70,9 +73,9 @@ export class DriveLog {
       p.mode ?? null, p.limit ?? null, r(p.g, 3), r(p.side, 3), r(p.rel, 0), r(p.alt, 1),
       r(p.pedal, 0), r(p.rpm, 0), r(p.obdKmh, 0),
       r(p.heading, 0), r(p.lonG, 3), r(p.coastAdj, 3), r(p.pedalRaw, 1), bit(p.gas),
-      r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut), r(p.gasRec, 0),
-      r(p.gasLo, 0), r(p.gasHi, 0), p.gasKind ?? null,
-      r(p.coolant, 0), r(p.load, 1), p.other && Object.keys(p.other).length ? { ...p.other } : null,
+      r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut), r(p.gasRec, 1),
+      r(p.gasLo, 1), r(p.gasHi, 1), p.gasKind ?? null,
+      r(p.coolant, 0), r(p.load, 1), bit(p.cruise), r(p.fuelL100, 1), p.gasUnit ?? null, p.other && Object.keys(p.other).length ? { ...p.other } : null,
     ];
     // Tomma fält i slutet tas bort (saknas = null), så loggen utan OBD blir inte större.
     while (row.length > 1 && row[row.length - 1] == null) row.pop();

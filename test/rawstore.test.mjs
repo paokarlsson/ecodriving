@@ -51,3 +51,24 @@ test('loggar som rensas bort tar sin rådata med sig', () => {
   store.remove(ids[2]);
   assert.deepEqual(removed, [ids[0], ids[2]]);
 });
+
+test('OBD-rådata med färre fält (äldre version) läses utan förskjutning', async () => {
+  const sink = memSink();
+  await sink.put({ logId: 'gammal', seq: 0, kind: 'obd', data: Float32Array.from([0, 50, 1500, 10, 4, 5, 1.6, 0, 0, NaN, 1, 60, 1600, 12, 5, 6, 2, 0, 0, NaN]) });
+  const raw = await readRaw('gammal', { sink });
+  assert.equal(raw.obd.rows.length, 2, 'utan sparad bredd: 10 fält');
+  assert.equal(raw.obd.rows[1][1], 60);
+  assert.equal(raw.obd.rows[1][raw.obd.fields.indexOf('cruise')], null);
+  const sink2 = memSink();
+  const rec = new RawRecorder('ny', { sink: sink2, flushMs: 0 });
+  rec.addObd({ t: 1_800_000_000, kmh: 70, rpm: 2000, pedal: 0, pedalRaw: 0, maf: 18, fuelRate: 6, fuelCut: false, released: false, cruise: true });
+  await rec.close();
+  const r2 = await readRaw('ny', { sink: sink2 });
+  const f = r2.obd.fields;
+  assert.equal(r2.obd.rows[0][f.indexOf('cruise')], 1);
+  // Ett block med 10 fält och angiven bredd: det nya fältet blir null
+  await sink2.put({ logId: 'ny', seq: 9, kind: 'obd', w: 10, data: Float32Array.from([1, 50, 1500, 10, 4, 5, 1.6, 0, 0, NaN]) });
+  const r3 = await readRaw('ny', { sink: sink2 });
+  assert.equal(r3.obd.rows[1][1], 50);
+  assert.equal(r3.obd.rows[1][f.indexOf('cruise')], null);
+});

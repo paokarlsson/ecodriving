@@ -61,13 +61,15 @@ Rena rullningar (minst 5 s och 4 km/h, 30–110 km/h, god GPS) vägs ihop med ru
 En ELM327-kompatibel dosa med Bluetooth 4.0/BLE (t.ex. Vgate iCar Pro BLE) kan anslutas under Inställningar → OBD-dosa. Det kräver Web Bluetooth, alltså Chrome på Android (eller Chrome/Edge på datorn); Safari på iPhone saknar det, och dosor med Bluetooth 3.0 eller Wi-Fi går inte att nå från en webbsida. Dosan ska inte parkopplas i telefonens Bluetooth-inställningar, den väljs i Chromes lista.
 
 - **Test vid anslutning:** dosan startas (`ATZ`, `ATE0`, `ATS0`, `ATSP0` …) och appen läser vilka värden bilen redovisar (`0100`, `0120`, `0140`). Kortet visar dosa, protokoll och om fart, varvtal, gaspedal, bränsle och avstängt bränsle finns. Det som saknas tas från GPS som förut.
-- **Övrigt:** appen läser alla mode 01-värden bilen redovisar (`0100` … `01C0`), ett varannat varv så att pedalen fortfarande läses ofta. Kylvätsketemperatur (`05`) och motorlast (`04`) läses varannan gång, resten i tur och ordning. Ett värde som inte svarar tre gånger i rad hoppas över. Kända värden avkodas (t.ex. `intakeC`, `mapKpa`, `stft1Pct`, `ltft1Pct`, `timingDeg`, `baroKpa`, `moduleV`, `ambientC`, `oilC`, `catB1S1C`, `fuelLevelPct`, `odometerKm`, `torqueActualPct`); övriga sparas som hex (`pidXX`). Kylvätska, last och övrigt visas live i OBD-kortet under Inställningar, och kylvätska och last i körvyn.
+- **Övrigt:** appen läser alla mode 01-värden bilen redovisar (`0100` … `01C0`), ett varannat varv så att pedalen fortfarande läses ofta. Kylvätsketemperatur (`05`) och motorlast (`04`) läses varannan gång, resten i tur och ordning. Ett värde som inte svarar tre gånger i rad hoppas över en stund och prövas sedan igen (efter 30 s, sedan dubbelt så länge varje gång, högst 10 min). Kylvätska och last visas bara om de lästs den senaste minuten. Kända värden avkodas (t.ex. `intakeC`, `mapKpa`, `stft1Pct`, `ltft1Pct`, `timingDeg`, `baroKpa`, `moduleV`, `ambientC`, `oilC`, `catB1S1C`, `fuelLevelPct`, `odometerKm`, `torqueActualPct`); övriga sparas som hex (`pidXX`). Kylvätska, last och övrigt visas live i OBD-kortet under Inställningar, och kylvätska och last i körvyn.
 - **Gaspedalen** läses i första hand som relativ pedal (`5A`), annars pedal D (`49`), relativt gasspjäll (`45`) eller gasspjäll (`11`). Givarna visar sällan 0 utan fot, så viloläget lärs in som det lägsta värdet; gasen räknas som släppt under 3 % och nedtryckt över 8 %.
+- **Farthållare:** med farthållaren på visar pedalgivaren 0 fast motorn drar. Appen känner igen det på att pedalen är släppt men bränsleflödet ligger klart över tomgång (minst dubbla tomgången och 1 l/h över den, tomgången mäts när bilen står still) i 3 s, över 25 km/h och utan avstängt bränsle. Då räknas gasen som på: signalen räknas inte som följd, ingen motorbroms visas och rullningen mäts inte förrän farthållaren slås av (bränslet går ner till tomgång eller stängs av). Gasraden visar *Farthållare*, och vid släpp *Slå av farthållaren – rulla*.
+- **Momentan förbrukning** (l/100 km, under 10 km/h l/h) visas i körvyn bredvid varvtalet, ur bränsleflödet (`5E`) eller luftflödet (`10`), utjämnad över ca 3 s; 0 när bränslet är avstängt.
 - **I körvyn** visas pedalen som en båge i ringen (grön när gasen är släppt), varvtalet, och *Motorbroms* eller *Bränsle av* (bränslesystemets status `03` = 4 med släppt gas). När gasen släpps efter en signal visas *Gas släppt efter 0,6 s*. Med pedalen avgör den, inte GPS-farten, om signalen följdes, och en rullning avbryts när gasen trycks ned igen.
 - **Rullmodellen:** rullningar där pedalen visar att gasen var helt släppt hela tiden räknas även om de inte började vid en släpp-signal, och gas under rullningen avbryter mätningen.
 - **Sammanfattningen** visar reaktionstid (median), bränsle (bränsleflöde `5E`, annars beräknat ur luftflödet `10` för bensin), sträcka med motorbroms eller avstängt bränsle, och en stapel per signal med tiden till släppt gas.
 - Tappas anslutningen fortsätter appen med GPS och ansluter igen av sig själv (efter 3, 6, 12 … högst 30 s). Med *Anslut automatiskt när körningen startar* ansluter appen till den sparade dosan vid Starta om webbläsaren minns den (`getDevices`); annars ansluter man med OBD-knappen i körvyn.
-- Körloggen får fälten `pedal`, `rpm`, `obdKmh`, `pedalRaw`, `gas`, `fuelLh`, `maf` och `fuelCut`, händelserna `obd` (ansluten/tappad) och `follow` med `byPedal`, och sammanfattningen `obd`. Rådatan får tabellen `obd` (`t, kmh, rpm, pedal, pedalRaw, maf, fuelLh, fuelCut, released, fuelLhCar`) med varje värde från dosan (ca 4 per sekund), och `obdx` (`t, pid, value, A, B, C, D`) med varje övrigt värde: avkodat och svarets databytes.
+- Körloggen får fälten `pedal`, `rpm`, `obdKmh`, `pedalRaw`, `gas`, `fuelLh`, `maf` och `fuelCut`, händelserna `obd` (ansluten/tappad) och `follow` med `byPedal`, och sammanfattningen `obd`. Rådatan får tabellen `obd` (`t, kmh, rpm, pedal, pedalRaw, maf, fuelLh, fuelCut, released, fuelLhCar, cruise`) med varje värde från dosan (ca 4 per sekund), och `obdx` (`t, pid, value, A, B, C, D`) med varje övrigt värde: avkodat och svarets databytes.
 
 ## Körlogg (JSON)
 
@@ -77,7 +79,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 - **Spara fil / Dela**: samma sak med alla mätpunkter (en per sekund).
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
-`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt), `gasRec` (rekommenderat gaspådrag, %), `gasLo`/`gasHi` (rekommendationens gränser), `gasKind` (`release`, `hold` eller `accel`), `coolant` (kylvätska, °C), `load` (motorlast, %) och `other` (övriga OBD-värden som lästs sedan förra mätpunkten, `{namn: värde}`; i kompakt logg följer de med till nästa mätpunkt som behålls). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
+`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt), `gasRec` (rekommenderat gaspådrag, l/h eller %), `gasLo`/`gasHi` (rekommendationens gränser), `gasKind` (`release`, `hold` eller `accel`), `coolant` (kylvätska, °C), `load` (motorlast, %), `cruise` (1 = farthållaren drar), `fuelL100` (momentan förbrukning, l/100 km), `gasUnit` (`lh` eller `pct` för `gasRec`) och `other` (övriga OBD-värden som lästs sedan förra mätpunkten, `{namn: värde}`; i kompakt logg följer de med till nästa mätpunkt som behålls). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute` (med färdriktning och antal försök), `rerouteFailed`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Testbana
@@ -113,14 +115,27 @@ Varje riktig körning sparar också all rådata i telefonens databas (IndexedDB,
 
 ## Rekommenderat gaspådrag (OBD)
 
-Med OBD-dosan visas en gasrad under ringen, både med och utan rutt: stapeln är gaspedalen (grön inom rekommendationen, orange utanför), det gröna fältet och strecket är det rekommenderade pådraget, och en kort rad säger vad som gäller (`js/gasadvice.js`).
+Med OBD-dosan visas en gasrad under ringen, både med och utan rutt: stapeln är bränsleflödet i l/h (0–20 l/h) eller, om bilen varken ger bränsleflöde eller luftflöde, gaspedalen i %. Den är grön inom rekommendationen, orange utanför; det gröna fältet och strecket är det rekommenderade, och en kort rad säger vad som gäller (`js/gasadvice.js`).
+
+- **Bränsleflödet** mäter det som ska sparas och fungerar även med farthållaren: då bedöms farthållarens flöde mot rådet (*Håll 70: farthållaren drar mycket*), och bara släpp kräver att den slås av. Bränslemodellen (`FuelModel`) lär sig flödet som håller farten per 10 km/h på plan väg (bara där höjddatan säger under 2 % lutning, omräknat till plan väg), hur mycket extra flöde accelerationen kräver (l/h per m/s² · m/s, typvärde 0,5) och tomgången. Typvärdet innan dess: tomgång + 0,5 l/h + 0,5 · (rullmotstånd ur rullmodellen) · fart, ca 4 l/h vid 60 och 4,5 l/h vid 70 km/h. Den sparas efter varje körning (`store.fuelModel`).
+- **Backen** tas i första hand ur bilen själv: med gas ur flödet mot accelerationen, med släppt gas ur inbromsningen utöver rullmodellen, utjämnad över ca 6 s (`HillEstimate`). I l/h väger backen tungt (2 % i 70 km/h är ca 2 l/h) och höjddatan har fel på flera procent; i en verklig körning låg flödet inom rådet 47 % av tiden med backen ur bilen mot 34 % med höjddatan. Utan skattning används höjddatan.
 
 - **Släpp** (0 %): under rullning, när mindre än 150 m återstår till släpp-signalen (ingen idé att gasa upp farten man snart ska rulla av), och när farten är mer än 3 km/h över gränsen eller kurvfarten.
 - **Accelerera lugnt**: mer än 6 km/h under gränsen. Pedalen som håller farten plus det som ger ca 0,9 m/s² (0,1 g), ± 5 %.
 - **Håll farten**: pedalen som håller farten vid gränsen, ± 3 %.
-- Uppför och nedför (ruttens höjddata) läggs till som acceleration. Under 8 km/h ges ingen rekommendation.
+- Uppför och nedför (ruttens höjddata, medellutningen över ±150 m eftersom höjddatan har hopp på flera meter) läggs till som acceleration. Under 8 km/h ges ingen rekommendation.
 - **Inlärning:** vid jämn fart (under 0,15 m/s² ändring) med gas lär appen sig pedalen per 10 km/h; vid tydlig acceleration hur många procent extra pedal en m/s² kräver. Innan det finns minst fem mätningar används typvärden (ca 12 % vid 50 km/h och 14 % per m/s²), och raden säger *(typvärde)*. Modellen sparas efter varje körning.
-- Sammanfattningen visar andelen av tiden (med OBD och i rörelse) inom rekommendationen; loggen har fältet `gasRec` per mätpunkt och `stats.gasWithinPct`.
+- Accelerationen för inlärningen tas över ca 3 s: bilens fart kommer i hela km/h, och 1 km/h på 1 s är redan 0,28 m/s².
+- Sammanfattningen visar andelen av tiden (med OBD och i rörelse) inom rekommendationen; loggen har fälten `gasRec`, `gasLo`, `gasHi` och `gasUnit` (`lh` eller `pct`) per mätpunkt och `stats.gasWithinPct`.
+
+## Bränsle sparat genom rullning (OBD)
+
+En rullning börjar när gasen släpps över 20 km/h och slutar när gasen trycks ned igen eller bilen stannar (`js/fuelsave.js`). Bränslet som gick åt (med bränsleavstängning ofta 0) jämförs med att hålla farten från början av rullningen över samma sträcka och sedan bromsa ner till samma fart, vilket inte kostar bränsle. Flödet som håller farten kommer från bränslemodellen, med backen ur höjddatan över rullningens sträcka. Blir det negativt (tomgång i nedförsbacke i låg fart) räknas 0. Rullningar kortare än 30 m räknas inte.
+
+- Rullningar som börjar inom 8 s efter en släpp-signal räknas som följda signaler.
+- I körvyn visas *Rullningen sparade ca 35 ml* efter varje rullning efter en signal, och efter andra rullningar som sparade minst 20 ml.
+- Sammanfattningen visar det sparade totalt (uppskattat, och hur många procent mindre bränsle det blev) och hur mycket av det som kom efter signaler (`stats.obd.fuelSavedL`, `fuelSavedSignalL`, `savedCoasts`); loggen har händelsen `saved` per rullning (`distM`, `v0Kmh`, `usedL`, `altL`, `savedL`, `signal`, `reason`).
+- I en verklig körning (11 km, 0,77 l) gav sex rullningar ca 80 ml, ungefär 10 %.
 
 ## Utveckling
 
@@ -147,7 +162,8 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/demo.js`, `js/sim.js` | Testbana och simulerade bilar |
 | `js/horizon.js` | Vägen framåt utan rutt ur OSM:s vägnät |
-| `js/gasadvice.js` | Rekommenderat gaspådrag och pedalmodellen |
+| `js/gasadvice.js` | Rekommenderat gaspådrag, pedal- och bränslemodellen, backen ur OBD |
+| `js/fuelsave.js` | Bränsle sparat genom rullning |
 
 ## Publicering
 

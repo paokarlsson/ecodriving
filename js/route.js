@@ -85,6 +85,20 @@ function interp(route, arr, s) {
 
 export const gradeAt = (route, s) => interp(route, route.G, s);
 export const elevationAt = (route, s) => interp(route, route.E, s);
+
+/**
+ * Medellutningen över ±half m (andel). Höjddata kommer i hela meter med
+ * hopp på flera meter; för gasrådet, som ska hålla farten jämn, duger bara
+ * den långa lutningen, annars hoppar rådet med varje hopp i höjddatan.
+ */
+export function gradeAvg(route, s, half = 150) {
+  const a = Math.max(0, s - half), b = Math.min(route.length ?? (route.n - 1) * route.step, s + half);
+  if (b - a < route.step) return gradeAt(route, s);
+  const ia = Math.max(0, Math.floor(a / route.step)), ib = Math.min(route.n - 1, Math.ceil(b / route.step));
+  let sum = 0;
+  for (let i = ia; i <= ib; i++) sum += route.G[i];
+  return sum / (ib - ia + 1);
+}
 export function headingAt(route, s) {
   return route.H[sampleIndex(route, s).i];
 }
