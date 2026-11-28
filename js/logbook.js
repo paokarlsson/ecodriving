@@ -28,6 +28,8 @@ export const SAMPLE_FIELDS = [
   'maf',    // luftflöde (g/s, OBD)
   'fuelCut', // 1 = bränslet avstängt (motorbroms), 0 = inte (OBD)
   'gasRec', // rekommenderat gaspådrag (%, OBD)
+  'gasLo', 'gasHi', // rekommendationens gränser (%)
+  'gasKind', // release | hold | accel
 ];
 
 /** Kompakt export: alla mätpunkter för körningar upp till så här många sekunder. */
@@ -65,6 +67,7 @@ export class DriveLog {
       r(p.pedal, 0), r(p.rpm, 0), r(p.obdKmh, 0),
       r(p.heading, 0), r(p.lonG, 3), r(p.coastAdj, 3), r(p.pedalRaw, 1), bit(p.gas),
       r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut), r(p.gasRec, 0),
+      r(p.gasLo, 0), r(p.gasHi, 0), p.gasKind ?? null,
     ];
     // Tomma fält i slutet tas bort (saknas = null), så loggen utan OBD blir inte större.
     while (row.length > 1 && row[row.length - 1] == null) row.pop();

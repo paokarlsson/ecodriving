@@ -66,7 +66,7 @@ En ELM327-kompatibel dosa med Bluetooth 4.0/BLE (t.ex. Vgate iCar Pro BLE) kan a
 - **Rullmodellen:** rullningar där pedalen visar att gasen var helt släppt hela tiden räknas även om de inte började vid en släpp-signal, och gas under rullningen avbryter mätningen.
 - **Sammanfattningen** visar reaktionstid (median), bränsle (bränsleflöde `5E`, annars beräknat ur luftflödet `10` för bensin), sträcka med motorbroms eller avstängt bränsle, och en stapel per signal med tiden till släppt gas.
 - Tappas anslutningen fortsätter appen med GPS och ansluter igen av sig själv (efter 3, 6, 12 … högst 30 s). Med *Anslut automatiskt när körningen startar* ansluter appen till den sparade dosan vid Starta om webbläsaren minns den (`getDevices`); annars ansluter man med OBD-knappen i körvyn.
-- Körloggen får fälten `pedal`, `rpm`, `obdKmh`, `pedalRaw`, `gas`, `fuelLh`, `maf` och `fuelCut`, händelserna `obd` (ansluten/tappad) och `follow` med `byPedal`, och sammanfattningen `obd`. Rådatan får tabellen `obd` (`t, kmh, rpm, pedal, pedalRaw, maf, fuelLh, fuelCut`).
+- Körloggen får fälten `pedal`, `rpm`, `obdKmh`, `pedalRaw`, `gas`, `fuelLh`, `maf` och `fuelCut`, händelserna `obd` (ansluten/tappad) och `follow` med `byPedal`, och sammanfattningen `obd`. Rådatan får tabellen `obd` (`t, kmh, rpm, pedal, pedalRaw, maf, fuelLh, fuelCut, released, fuelLhCar`), med varje värde från dosan (ca 4 per sekund).
 
 ## Körlogg (JSON)
 
@@ -76,7 +76,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 - **Spara fil / Dela**: samma sak med alla mätpunkter (en per sekund).
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
-`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt) och `gasRec` (rekommenderat gaspådrag, %). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
+`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt), `gasRec` (rekommenderat gaspådrag, %), `gasLo`/`gasHi` (rekommendationens gränser) och `gasKind` (`release`, `hold` eller `accel`). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute` (med färdriktning och antal försök), `rerouteFailed`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Testbana
@@ -93,6 +93,8 @@ Varje riktig körning sparar också all rådata i telefonens databas (IndexedDB,
 | Rörelse | `t, ax, ay, az` (utan tyngdkraft), `gx, gy, gz` (med tyngdkraft), `alpha, beta, gamma` (gyro, grader/s) | varje sensorhändelse (ca 50–60/s) |
 | Kompass | `t, heading` | varje händelse |
 | API | ruttsvaret (koordinater med höjd, sträcka, tid) och vägdatan från Overpass | vid planering och ny rutt |
+| Utan rutt | `osmnet`: vägnätet som användes (celler, fel, alla element); `horizon`: varje väg framåt med geometri och mål | vid varje hämtning och omräkning |
+| OBD | se OBD-dosa ovan | varje värde från dosan |
 
 `t` är sekunder sedan starten. *Spara fil* / *Dela* i körloggarna ger loggen med rådatan under `raw`; *Kopiera för analys* är som förut kompakt utan rådata. Rådatan raderas tillsammans med sin logg, och de 10 senaste loggarna sparas.
 

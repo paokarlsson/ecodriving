@@ -75,7 +75,7 @@ test('alla fält sparas, tomma fält i slutet tas bort', () => {
   l.sample(0, { s: 1, kmh: 10, mode: 'free' });
   l.sample(1, {
     s: 2, kmh: 20, mode: 'approach', heading: 59.4, lonG: -0.031, coastAdj: 0.05,
-    pedal: 0, rpm: 1100, obdKmh: 20, pedalRaw: 14.9, gas: false, fuelLh: 0, maf: 3.21, fuelCut: true, gasRec: 12.4,
+    pedal: 0, rpm: 1100, obdKmh: 20, pedalRaw: 14.9, gas: false, fuelLh: 0, maf: 3.21, fuelCut: true, gasRec: 12.4, gasLo: 9.4, gasHi: 15.4, gasKind: 'hold',
   });
   assert.equal(l.rows[0].length, 7);                    // slutar vid mode
   const f = n => l.rows[1][SAMPLE_FIELDS.indexOf(n)];
@@ -88,6 +88,7 @@ test('alla fält sparas, tomma fält i slutet tas bort', () => {
   assert.equal(f('maf'), 3.2);
   assert.equal(f('fuelCut'), 1);
   assert.equal(f('gasRec'), 12);
+  assert.equal(f('gasKind'), 'hold');
 });
 
 test('kompakt: korta körningar får alla mätpunkter, långa behåller lägesbyten', () => {

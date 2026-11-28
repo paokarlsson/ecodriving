@@ -1008,6 +1008,8 @@ function ensureNetwork(obs) {
     f.net = buildNetwork(f.elements, obs.lat, obs.lon);
     f.roads = f.net.ways.map(w => w.g);
     f.builtAt = 0;   // räkna om vägen framåt med det nya vägnätet
+    // Vägnätet som användes, till rådatan (nyhämtat och från telefonens cache)
+    drive.raw?.addApi('osmnet', { cells: missing, fetched: res.fetched, failed: res.failed, error: res.error, elements: res.elements });
     drive.log?.event(drive.lastObs?.t ?? Date.now() / 1000, 'network', {
       cells: f.cells.size, fetched: res.fetched.length, failed: res.failed.length, error: res.error, ways: f.net.ways.length,
     });
@@ -1072,7 +1074,12 @@ function setFreeRoute(h, obs, heading) {
     drive.engine.setRoute(plan.route, plan.targets);
     drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
   }
-  // Logga när vägen framåt blir en annan (inte varje förlängning)
+  // Varje väg framåt med geometri till rådatan; i loggen bara när den blir en annan
+  drive.raw?.addApi('horizon', {
+    t: obs.t, lat: obs.lat, lon: obs.lon, heading, reason: h?.reason ?? null, name: h?.name ?? null, wayId: h?.wayId ?? null,
+    coords: h ? h.coords.map(c => [Math.round(c[0] * 1e6) / 1e6, Math.round(c[1] * 1e6) / 1e6]) : null,
+    targets: plan.targets.map(t => ({ s: Math.round(t.s), kmh: Math.round(t.v * 3.6), kind: t.kind, lat: t.lat, lon: t.lon })),
+  });
   const key = h ? `${h.wayId}|${h.reason}` : 'none';
   if (key !== f.lastKey) {
     f.lastKey = key;
@@ -1429,6 +1436,13 @@ function onDriveObs(obs) {
   while (drive.trail.length && obs.t - drive.trail[0].t > 30) drive.trail.shift();
 }
 
+/** Rekommenderat gaspådrag för en mätpunkt i körloggen. */
+function gasFields() {
+  const g = drive.gasRec;
+  if (!obdActive() || !g || g.kind === 'none') return {};
+  return { gasRec: g.mid, gasLo: g.lo, gasHi: g.hi, gasKind: g.kind };
+}
+
 /** OBD-värden för en mätpunkt i körloggen (tomt utan aktiv dosa). */
 function obdFields() {
   if (!obdActive()) return {};
@@ -1451,7 +1465,7 @@ function logDrive(view, obs, events) {
     coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
     heading: obs.heading,
     ...obdFields(),
-    gasRec: obdActive() && drive.gasRec ? (drive.gasRec.kind === 'none' ? null : drive.gasRec.mid) : null,
+    ...gasFields(),
   });
   for (const ev of events) {
     const tg = ev.target;

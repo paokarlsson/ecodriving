@@ -8,8 +8,9 @@ export const MOTION_FIELDS = ['t', 'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'alpha', 
 export const GPS_FIELDS = ['t', 'lat', 'lon', 'alt', 'acc', 'altAcc', 'speed', 'heading'];
 export const COMPASS_FIELDS = ['t', 'heading'];
 // OBD: kmh och rpm från bilen, pedal (%) och pedalRaw (givarens värde, %),
-// maf (g/s), fuelLh (l/h, beräknat om bilen inte ger det), fuelCut (1 = bränslet avstängt)
-export const OBD_FIELDS = ['t', 'kmh', 'rpm', 'pedal', 'pedalRaw', 'maf', 'fuelLh', 'fuelCut'];
+// maf (g/s), fuelLh (l/h, beräknat om bilen inte ger det), fuelCut (1 = bränslet avstängt),
+// released (1 = gasen räknas som släppt), fuelLhCar (l/h enligt bilen, om den ger det)
+export const OBD_FIELDS = ['t', 'kmh', 'rpm', 'pedal', 'pedalRaw', 'maf', 'fuelLh', 'fuelCut', 'released', 'fuelLhCar'];
 
 const DB_NAME = 'bromsfri-raw';
 const STORE = 'chunks';
@@ -99,7 +100,8 @@ export class RawRecorder {
 
   /** s från ObdPoller: {t, kmh, rpm, pedal, pedalRaw, maf, fuelRate, fuelCut} */
   addObd(s) {
-    this.obd.push(this.rel(s.t), num(s.kmh), num(s.rpm), num(s.pedal), num(s.pedalRaw), num(s.maf), num(s.fuelRate), s.fuelCut == null ? NaN : s.fuelCut ? 1 : 0);
+    this.obd.push(this.rel(s.t), num(s.kmh), num(s.rpm), num(s.pedal), num(s.pedalRaw), num(s.maf), num(s.fuelRate), s.fuelCut == null ? NaN : s.fuelCut ? 1 : 0,
+      s.released == null ? NaN : s.released ? 1 : 0, num(s.fuelLh));
     this.counts.obd++;
   }
 
