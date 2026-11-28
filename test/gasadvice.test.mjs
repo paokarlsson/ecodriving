@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PedalModel, recommendGas, gasWithin, gasHint, typicalCruise, GAS } from '../js/gasadvice.js';
+import { PedalModel, FuelModel, FUEL, HillEstimate, recommendGas, gasWithin, gasHint, typicalCruise, GAS } from '../js/gasadvice.js';
 
 test('typvärden utan inlärning', () => {
   const m = new PedalModel();
@@ -62,4 +62,67 @@ test('med farthållaren: släpp betyder slå av farthållaren, håll bedöms int
   const rel = recommendGas(m, { kmh: 70, mode: 'coasting' });
   assert.equal(gasWithin(rel, 0, false, true), false);
   assert.match(gasHint(rel, 0, false, true), /Slå av farthållaren/);
+});
+
+test('bränslemodellen: typvärden ur rullmodellen, inlärning per fart och för acceleration', () => {
+  const m = new FuelModel(null, { A: 0.28, C: 0.00003 });
+  const t60 = m.level(60), t70 = m.level(70);
+  assert.equal(t60.learned, false);
+  assert.ok(t60.x > 3.5 && t60.x < 5, `60 km/h: ${t60.x}`);
+  assert.ok(t70.x > t60.x);
+  // Lär tomgången och flödet som håller farten (uppför räknas om till plan väg)
+  for (let i = 0; i < 5; i++) m.learnIdle(0.9);
+  assert.ok(Math.abs(m.idleLh() - 0.9) < 0.01);
+  for (let i = 0; i < 20; i++) m.learn(60, 0.02, 4.2);
+  for (let i = 0; i < 20; i++) m.learn(70, 0, 4.9 + m.extra(70, 9.81 * 0.02), 0.02);
+  assert.equal(m.level(65).learned, true);
+  assert.ok(Math.abs(m.level(70).x - 4.9) < 0.05, `70: ${m.level(70).x}`);
+  // För brant: lärs inte
+  m.learn(80, 0, 15, 0.08);
+  assert.equal(m.bins['80'], undefined);
+  // Acceleration lär q
+  for (let i = 0; i < 10; i++) m.learn(50, 1.0, m.level(50).x + 0.6 * 1.0 * 50 / 3.6);
+  assert.ok(Math.abs(m.qLh() - 0.6) < 0.02, `q ${m.qLh()}`);
+  const back = new FuelModel(JSON.parse(JSON.stringify(m.toJSON())), { A: 0.28, C: 0.00003 });
+  assert.equal(back.level(70).x, m.level(70).x);
+  // Nedför: flödet som håller farten blir aldrig negativt
+  assert.equal(m.holdLh(70, -0.1), 0);
+});
+
+test('gasrådet i l/h: band, backe, och farthållaren bedöms på flödet', () => {
+  const m = new FuelModel(null, { A: 0.28, C: 0.00003 });
+  const hold = recommendGas(m, { kmh: 70, mode: 'free', limitKmh: 70 });
+  assert.equal(hold.unit, 'lh');
+  assert.equal(hold.scale, FUEL.scale);
+  assert.ok(hold.hi - hold.lo >= 2 * FUEL.holdMin - 1e-9);
+  const up = recommendGas(m, { kmh: 70, mode: 'free', limitKmh: 70, grade: 0.03 });
+  assert.ok(up.mid > hold.mid + 1.5, `uppför ${up.mid} mot ${hold.mid}`);
+  const acc = recommendGas(m, { kmh: 40, mode: 'free', limitKmh: 70 });
+  assert.equal(acc.kind, 'accel');
+  assert.ok(acc.mid > m.level(40).x + 3);
+  assert.equal(gasWithin(hold, hold.mid, false, true), true, 'farthållaren inom flödet');
+  assert.equal(gasWithin(hold, hold.hi + 2, false, true), false);
+  assert.match(gasHint(hold, hold.hi + 2, false, true), /farthållaren drar mycket/);
+  const rel = recommendGas(m, { kmh: 70, mode: 'coasting' });
+  assert.equal(gasWithin(rel, 0, true), true);
+  assert.equal(gasWithin(rel, 5, false, true), false);
+  assert.match(gasHint(rel, 5, false, true), /Slå av farthållaren/);
+});
+
+test('backen ur OBD: flöde med gas och inbromsning vid rullning', () => {
+  const m = new FuelModel(null, { A: 0.28, C: 0.00003 });
+  // Uppför 3 %: flödet som håller 70 km/h där
+  const lh = m.holdLh(70, 0.03);
+  assert.ok(Math.abs(m.hillWithGas(70, 0, lh) - 9.81 * 0.03) < 1e-9);
+  // Rullning nedför 2 %: inbromsningen blir mindre än modellens
+  const v = 70 / 3.6, a = -(0.28 + 0.00003 * v * v - 9.81 * 0.02);
+  assert.ok(Math.abs(m.hillCoasting(70, a) + 9.81 * 0.02) < 1e-9);
+  const h = new HillEstimate();
+  for (let i = 0; i < 4; i++) h.add(0.3);
+  assert.equal(h.grade(), null, 'för få mätningar');
+  for (let i = 0; i < 30; i++) h.add(9.81 * 0.03);
+  assert.ok(Math.abs(h.grade() - 0.03) < 0.002);
+  h.add(NaN);
+  h.reset();
+  assert.equal(h.grade(), null);
 });
