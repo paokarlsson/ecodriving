@@ -102,16 +102,26 @@ export function recommendGas(model, { kmh, mode, distToRelease = null, limitKmh 
   return { kind: 'hold', lo: clamp(mid - GAS.holdBand), hi: clamp(mid + GAS.holdBand), mid, goal, learned: c.learned };
 }
 
-/** Ligger pedalen inom rekommendationen? null om det inte går att säga. */
-export function gasWithin(rec, pedal, released = null) {
-  if (!rec || rec.kind === 'none' || pedal == null) return null;
+/**
+ * Ligger pedalen inom rekommendationen? null om det inte går att säga.
+ * Med farthållaren (cruise) visar pedalen inget: släpp räknas som inte följt,
+ * håll och accelerera går inte att bedöma.
+ */
+export function gasWithin(rec, pedal, released = null, cruise = false) {
+  if (!rec || rec.kind === 'none') return null;
+  if (cruise) return rec.kind === 'release' ? false : null;
+  if (pedal == null) return null;
   if (rec.kind === 'release') return released ?? pedal < 3;
   return pedal >= rec.lo - 1 && pedal <= rec.hi + 1;
 }
 
 /** Kort text under gasraden. */
-export function gasHint(rec, pedal, released = null) {
+export function gasHint(rec, pedal, released = null, cruise = false) {
   if (!rec || rec.kind === 'none') return '';
+  if (cruise) {
+    if (rec.kind === 'release') return rec.why === 'over' ? `Över ${fmtKmh(rec.goal)}: slå av farthållaren` : 'Slå av farthållaren – rulla';
+    return 'Farthållaren håller farten';
+  }
   const ok = gasWithin(rec, pedal, released);
   switch (rec.kind) {
     case 'release':

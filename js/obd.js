@@ -20,6 +20,11 @@ export const OBD = {
   engineBrakeKmh: 20,
   petrolAfr: 14.7,   // luft/bränsle, bensin
   petrolDensity: 745, // g/l
+  // Farthållare: gasen släppt men motorn får bränsle som vid gaspådrag
+  cruiseKmh: 25,      // km/h: farthållare räknas bara över detta
+  cruiseHoldS: 3,     // s med bränsle utan pedal innan farthållaren räknas som på
+  idleLh: 1.2,        // l/h: tomgång innan den har mätts
+  otherRetryS: 30,    // s innan ett värde som slutat svara prövas igen (dubblas, högst 10 min)
 };
 
 /** Pedalkällor i prioritetsordning: relativ pedal, pedal D, relativt gasspjäll, gasspjäll. */
@@ -213,6 +218,38 @@ export class PedalTracker {
   }
 }
 
+/**
+ * Farthållare: med farthållaren på visar pedalgivaren 0 fast motorn drar.
+ * Den känns igen på att gasen är släppt men bränsleflödet ligger klart över
+ * tomgång (och bränslet inte är avstängt) i några sekunder. Tomgången lärs
+ * när bilen står still.
+ */
+export class CruiseDetector {
+  constructor() { this.idle = null; this.since = null; this.on = false; }
+
+  /** Gränsen (l/h) över vilken släppt gas ändå betyder att motorn drar. */
+  limit() {
+    const b = this.idle ?? OBD.idleLh;
+    return Math.max(2 * b, b + 1);
+  }
+
+  update(t, { released, kmh, fuelRate, fuelCut }) {
+    if (kmh === 0 && released && fuelRate != null && fuelRate > 0) {
+      this.idle = this.idle == null ? fuelRate : this.idle + 0.1 * (fuelRate - this.idle);
+    }
+    if (!released || fuelCut || kmh == null || kmh < OBD.cruiseKmh - 5) return this.reset();
+    if (fuelRate == null) return this.on;
+    const lim = this.limit();
+    if (fuelRate > lim && kmh >= OBD.cruiseKmh) {
+      if (this.since == null) this.since = t;
+      if (t - this.since >= OBD.cruiseHoldS) this.on = true;
+    } else if (fuelRate <= lim - 0.5) this.reset();
+    return this.on;
+  }
+
+  reset() { this.since = null; this.on = false; return false; }
+}
+
 /** Bränsle i l/h: bränsleflödet om bilen har det, annars ur luftflödet (bara bensin). */
 export function fuelRate({ fuelLh = null, maf = null, fuelCut = false, fuelType = null }) {
   if (fuelCut) return 0;
@@ -305,7 +342,8 @@ export class ElmSession {
 /**
  * Läser bilen i en slinga: gaspedal, fart och varvtal varje varv,
  * bränsleuppgifterna var slowEvery:e och ett övrigt värde varannan varv.
- * onSample får {t, kmh, rpm, pedalRaw, pedal, released, maf, fuelLh, fuelCut,
+ * onSample får {t, kmh, rpm, pedalRaw, pedal, released (gasen släppt och ingen
+ * farthållare), pedalReleased, cruise, maf, fuelLh, fuelCut,
  * fuelRate, rate, coolant, load, other: {namn: senaste värde}, extra: det
  * övriga värde som lästes detta varv {pid, name, value, bytes} eller null}.
  */
@@ -327,12 +365,15 @@ export class ObdPoller {
     this.other = {};         // namn → senaste värde
     this.otherT = {};        // namn → tid (ms)
     this.fails = new Map();  // pid → antal tomma svar i rad
+    this.retryAt = new Map(); // pid → tid (ms) då ett värde som slutat svara prövas igen
+    this.retryS = new Map();  // pid → nästa väntetid (s)
     this.turn = 0;
+    this.cruise = new CruiseDetector();
   }
 
   /** Nästa övriga pid att läsa, eller null. */
-  nextOther() {
-    const ok = p => (this.fails.get(p) || 0) < 3;
+  nextOther(t = this.now()) {
+    const ok = p => (this.fails.get(p) || 0) < 3 || t >= (this.retryAt.get(p) ?? Infinity);
     const prio = this.prio.filter(ok), rest = this.rest.filter(ok);
     if (!prio.length && !rest.length) return null;
     this.turn++;
@@ -340,13 +381,27 @@ export class ObdPoller {
     return rest[(this.turn >> 1) % rest.length] ?? prio[0];
   }
 
-  /** Läser en övrig pid; tre tomma svar i rad och den hoppas över. */
+  /**
+   * Läser en övrig pid. Efter tre tomma svar i rad hoppas den över en stund
+   * (30 s, sedan dubbelt så länge varje gång) och prövas sedan en gång igen.
+   */
   async readOther(t) {
-    const pid = this.nextOther();
+    const pid = this.nextOther(t);
     if (pid == null) return null;
     const b = await this.s.readBytes(pid);
-    if (!b) { this.fails.set(pid, (this.fails.get(pid) || 0) + 1); return null; }
+    if (!b) {
+      const n = (this.fails.get(pid) || 0) + 1;
+      this.fails.set(pid, n);
+      if (n >= 3) {
+        const wait = this.retryS.get(pid) ?? OBD.otherRetryS;
+        this.retryAt.set(pid, t + wait * 1000);
+        this.retryS.set(pid, Math.min(600, wait * 2));
+      }
+      return null;
+    }
     this.fails.set(pid, 0);
+    this.retryAt.delete(pid);
+    this.retryS.delete(pid);
     const value = decodeOther(pid, b);
     const name = pidName(pid);
     this.other[name] = value;
@@ -381,12 +436,20 @@ export class ObdPoller {
         const pedal = this.pedal.update(pedalRaw);
         // Bränslestatus 4 betyder hög last eller avstängt bränsle vid motorbroms
         const fuelCut = this.state.fuelCut && this.pedal.released ? true : this.state.fuelCut === null ? null : false;
+        const fr = fuelRate({ fuelLh: this.state.fuelLh, maf: this.state.maf, fuelCut, fuelType: this.s.info.fuelType });
+        const pedalReleased = this.pedal.released;
+        const cruise = this.cruise.update(t / 1000, { released: pedalReleased, kmh, fuelRate: fr, fuelCut });
+        // Kylvätska och last bara om de lästs nyligen, annars visas gamla värden
+        const fresh = k => this.other[k] != null && t - (this.otherT[k] ?? -Infinity) <= 60000 ? this.other[k] : null;
         this.onSample({
-          t: t / 1000, kmh, rpm, pedalRaw, pedal, released: this.pedal.released,
+          t: t / 1000, kmh, rpm, pedalRaw, pedal,
+          // Med farthållaren drar motorn fast pedalen är släppt: gasen räknas som på
+          released: pedalReleased == null ? null : pedalReleased && !cruise,
+          pedalReleased, cruise,
           maf: this.state.maf, fuelLh: this.state.fuelLh, fuelCut,
-          fuelRate: fuelRate({ fuelLh: this.state.fuelLh, maf: this.state.maf, fuelCut, fuelType: this.s.info.fuelType }),
+          fuelRate: fr,
           rate,
-          coolant: this.other.coolantC ?? null, load: this.other.loadPct ?? null,
+          coolant: fresh('coolantC'), load: fresh('loadPct'),
           other: this.other, extra,
         });
       } catch (e) {

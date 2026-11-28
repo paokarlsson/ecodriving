@@ -32,6 +32,8 @@ export const SAMPLE_FIELDS = [
   'gasKind', // release | hold | accel
   'coolant', // kylvätsketemperatur (°C, OBD)
   'load',   // motorlast (%, OBD)
+  'cruise', // 1 = farthållaren drar (gasen släppt men bränsle som vid gaspådrag, OBD)
+  'fuelL100', // momentan förbrukning (l/100 km, utjämnad över några sekunder, OBD)
   'other',  // övriga OBD-värden som lästs sedan förra mätpunkten {namn: värde}
 ];
 const OTHER = SAMPLE_FIELDS.indexOf('other');
@@ -72,7 +74,7 @@ export class DriveLog {
       r(p.heading, 0), r(p.lonG, 3), r(p.coastAdj, 3), r(p.pedalRaw, 1), bit(p.gas),
       r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut), r(p.gasRec, 0),
       r(p.gasLo, 0), r(p.gasHi, 0), p.gasKind ?? null,
-      r(p.coolant, 0), r(p.load, 1), p.other && Object.keys(p.other).length ? { ...p.other } : null,
+      r(p.coolant, 0), r(p.load, 1), bit(p.cruise), r(p.fuelL100, 1), p.other && Object.keys(p.other).length ? { ...p.other } : null,
     ];
     // Tomma fält i slutet tas bort (saknas = null), så loggen utan OBD blir inte större.
     while (row.length > 1 && row[row.length - 1] == null) row.pop();

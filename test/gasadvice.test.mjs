@@ -53,3 +53,13 @@ test('inom rekommendationen och texten', () => {
   assert.equal(gasWithin({ kind: 'none' }, 10), null);
   assert.ok(GAS.ecoAccel > 0);
 });
+
+test('med farthållaren: släpp betyder slå av farthållaren, håll bedöms inte', () => {
+  const m = new PedalModel();
+  const hold = recommendGas(m, { kmh: 70, mode: 'free', limitKmh: 70 });
+  assert.equal(gasWithin(hold, 0, false, true), null);
+  assert.match(gasHint(hold, 0, false, true), /Farthållaren/);
+  const rel = recommendGas(m, { kmh: 70, mode: 'coasting' });
+  assert.equal(gasWithin(rel, 0, false, true), false);
+  assert.match(gasHint(rel, 0, false, true), /Slå av farthållaren/);
+});

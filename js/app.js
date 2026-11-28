@@ -2,7 +2,7 @@
 import { haversine, angleDiff, headingXY } from './geo.js';
 import { store, maskKey, DEFAULT_SETTINGS, osmCache, netCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
-import { buildRoute, headingAt, xyAt, curveTargets, gradeAt, matchToRoute, latLonAt } from './route.js';
+import { buildRoute, headingAt, xyAt, curveTargets, gradeAt, gradeAvg, matchToRoute, latLonAt } from './route.js';
 import { fetchOsmAlongRoute, fetchOsmNetwork, cellsAround, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
 import { buildNetwork, buildHorizon, HORIZON } from './horizon.js';
 import { PedalModel, recommendGas, gasWithin, gasHint } from './gasadvice.js';
@@ -1111,7 +1111,7 @@ function updateGasRec(view) {
   drive.gasRec = paused ? { kind: 'none' } : recommendGas(drive.pedalModel, {
     kmh: (view.v || 0) * 3.6, mode: view.mode, distToRelease: view.distToRelease ?? null,
     limitKmh: plan.limits[i] ?? null, curveKmh: cur ? cur.v * 3.6 : null,
-    grade: plan.route.hasEle ? gradeAt(plan.route, s) : 0,
+    grade: plan.route.hasEle ? gradeAvg(plan.route, s) : 0,
   });
   renderGas();
 }
@@ -1125,14 +1125,16 @@ function renderGas() {
   if (!show) return;
   const o = obd.last;
   const p = Math.max(0, Math.min(100, o.pedal ?? 0));
-  const ok = gasWithin(rec, p, o.released);
+  const ok = gasWithin(rec, p, o.released, o.cruise);
   $('d-gas').classList.toggle('ok', !!ok);
+  $('d-gas').classList.toggle('cruise', !!o.cruise);
   $('d-gascur').style.width = `${p}%`;
   $('d-gasrec').style.left = `${rec.lo}%`;
   $('d-gasrec').style.width = `${Math.max(0, rec.hi - rec.lo)}%`;
   $('d-gasmark').style.left = `${rec.mid}%`;
-  $('d-gastext').textContent = `${Math.round(p)} % · rek. ${Math.round(rec.mid)} %`;
-  $('d-gashint').textContent = gasHint(rec, p, o.released) + (rec.learned === false && rec.kind !== 'release' ? ' (typvärde)' : '');
+  $('d-gastext').textContent = o.cruise ? 'Farthållare' : `${Math.round(p)} % · rek. ${Math.round(rec.mid)} %`;
+  $('d-gashint').textContent = gasHint(rec, p, o.released, o.cruise)
+    + (rec.learned === false && rec.kind !== 'release' && !o.cruise ? ' (typvärde)' : '');
 }
 
 /** Varje OBD-värde: lär pedalmodellen och räkna tiden inom rekommendationen. */
@@ -1143,12 +1145,12 @@ function gasObd(s) {
     if (prev && s.t - prev.t <= 3 && prev.kmh != null && !s.released) {
       const a = (s.kmh - prev.kmh) / 3.6 / (s.t - prev.t);
       const sNow = drive.engine.s || 0;
-      const grade = plan?.route?.hasEle ? gradeAt(plan.route, sNow) : 0;
+      const grade = plan?.route?.hasEle ? gradeAvg(plan.route, sNow) : 0;
       if (!plan?.demo) drive.pedalModel.learn((s.kmh + prev.kmh) / 2, a, s.pedal, grade);
     }
     drive.gasPrev = { t: s.t, kmh: s.kmh };
   }
-  const within = gasWithin(drive.gasRec, s.pedal, s.released);
+  const within = gasWithin(drive.gasRec, s.pedal, s.released, s.cruise);
   const dt = drive.gasLastT != null ? Math.min(2, s.t - drive.gasLastT) : 0;
   drive.gasLastT = s.t;
   if (within != null && dt > 0) {
@@ -1449,6 +1451,7 @@ function obdFields() {
   const o = obd.last;
   return {
     coolant: o.coolant, load: o.load,
+    cruise: o.cruise ?? null, fuelL100: drive.fuelNow?.l100 ?? null,
     pedal: o.pedal, rpm: o.rpm, obdKmh: o.kmh, pedalRaw: o.pedalRaw,
     gas: o.released == null ? null : !o.released,
     fuelLh: o.fuelRate, maf: o.maf, fuelCut: o.fuelCut,
@@ -2043,7 +2046,7 @@ function resetDriveObd() {
   drive.badge = null;
   drive.obdUsed = false;
   drive.pedalHist = [];
-  drive.fuelL = 0; drive.fuelKnown = false;
+  drive.fuelL = 0; drive.fuelKnown = false; drive.fuelNow = null;
   drive.ebrakeM = 0; drive.fuelCutKnown = false;
   drive.obdPrevT = null;
   drive.obsWall = null;
@@ -2063,6 +2066,26 @@ function pedalReleasedBetween(t0, t1) {
   return h.every(p => p.released);
 }
 
+/**
+ * Momentan förbrukning: bränsleflöde och fart jämnas ut över ca 3 s
+ * (luftflödet läses en gång i sekunden). l/100 km från 10 km/h, annars l/h.
+ */
+function fuelNow(prev, s, dt) {
+  if (s.fuelRate == null || s.kmh == null) return prev && dt < 5 ? prev : null;
+  const k = prev && dt > 0 ? Math.min(1, dt / 3) : 1;
+  const lh = prev ? prev.lh + k * (s.fuelRate - prev.lh) : s.fuelRate;
+  const kmh = prev ? prev.kmh + k * (s.kmh - prev.kmh) : s.kmh;
+  return { lh, kmh, l100: kmh >= 10 ? lh / kmh * 100 : null, cut: !!s.fuelCut };
+}
+
+function fuelNowText(f) {
+  if (!f) return '';
+  const n1 = x => x.toFixed(1).replace('.', ',');
+  if (f.cut && f.lh < 0.05) return '<b>0</b> l/100 km';
+  if (f.l100 != null) return `<b>${n1(Math.min(99, f.l100))}</b> l/100 km`;
+  return `<b>${n1(f.lh)}</b> l/h`;
+}
+
 function onObdSample(s) {
   obd.last = s;
   if (!$('settings').hidden) renderObdLive();
@@ -2079,6 +2102,7 @@ function onObdSample(s) {
   const dt = drive.obdPrevT != null ? Math.min(2, s.t - drive.obdPrevT) : 0;
   drive.obdPrevT = s.t;
   if (s.fuelRate != null) { drive.fuelL += s.fuelRate * dt / 3600; drive.fuelKnown = true; }
+  drive.fuelNow = fuelNow(drive.fuelNow, s, dt);
   if (s.fuelCut != null) drive.fuelCutKnown = true;
   if (drive.fuelCutKnown ? s.fuelCut : engineBraking(s)) drive.ebrakeM += (s.kmh || 0) / 3.6 * dt;
   if (t == null) return;
@@ -2168,7 +2192,10 @@ function renderObdDrive() {
     $('d-pedalfg').setAttribute('stroke-dasharray', `${p.toFixed(1)} 100`);
     const parts = [];
     if (s.rpm != null) parts.push(`<b>${Math.round(s.rpm).toLocaleString('sv-SE')}</b> rpm`);
-    if (s.pedal != null) parts.push(`gas <b>${Math.round(s.pedal)} %</b>`);
+    if (s.cruise) parts.push('<b>farthållare</b>');
+    else if (s.pedal != null) parts.push(`gas <b>${Math.round(s.pedal)} %</b>`);
+    const fc = fuelNowText(drive.fuelNow);
+    if (fc) parts.push(fc);
     if (s.load != null) parts.push(`last <b>${Math.round(s.load)} %</b>`);
     if (s.coolant != null) parts.push(`<b>${Math.round(s.coolant)} °C</b>`);
     $('d-obdline').innerHTML = parts.join(' · ');

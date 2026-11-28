@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   responseLines, responseError, pidBytes, supportedFrom, decodePid, PedalTracker,
-  fuelRate, ElmSession, ObdPoller, engineBraking, decodeOther, pidName,
+  fuelRate, ElmSession, ObdPoller, engineBraking, decodeOther, pidName, CruiseDetector,
 } from '../js/obd.js';
 import { DriveEngine } from '../js/drive.js';
 import { buildRoute } from '../js/route.js';
@@ -65,13 +65,13 @@ test('bränsle: flöde, luftflöde för bensin, avstängt', () => {
 });
 
 /** En låtsasdosa som svarar som en ELM327 med CAN. */
-function fakeElm({ pedal = 0x26, sup = '4100BE1FA813', sup40 = '414000800000' } = {}) {
+function fakeElm({ pedal = 0x26, sup = '4100BE1FA813', sup40 = '414000800000', maf = '411001F4' } = {}) {
   let handler = () => {};
   const sent = [];
   const reply = {
     ATZ: 'ELM327 v2.3', ATE0: 'OK', ATL0: 'OK', ATS0: 'OK', ATH0: 'OK', ATAT1: 'OK', ATSP0: 'OK',
     ATI: 'ELM327 v2.3', ATDPN: 'A6', '0100': 'SEARCHING...\r' + sup, '0120': '412000000001', '0140': sup40,
-    '010D': '410D3C', '010C': '410C1AF8', '0103': '41030200', '0110': '411001F4',
+    '010D': '410D3C', '010C': '410C1AF8', '0103': '41030200', '0110': maf,
     '0104': '410480', '0105': '41057B', '0106': '410690', '0101': '410100076500',
   };
   const t = {
@@ -206,4 +206,61 @@ test('slingan läser kylvätska, last och resten av det bilen redovisar', async 
   assert.ok(tries <= 3, `0107 försökt ${tries} gånger`);
   // Pedalen läses fortfarande varje varv
   assert.equal(tr.sent.filter(c => c === '0149').length, 40);
+});
+
+test('farthållare: släppt pedal men bränsle som vid gaspådrag räknas som gas', () => {
+  const c = new CruiseDetector();
+  // Tomgång lärs när bilen står still
+  for (let t = 0; t < 5; t++) c.update(t, { released: true, kmh: 0, fuelRate: 1.1, fuelCut: false });
+  assert.ok(Math.abs(c.idle - 1.1) < 0.01);
+  // Släpper gasen: luftflödet ligger kvar en sekund, sedan tomgång eller avstängt
+  assert.equal(c.update(10, { released: true, kmh: 60, fuelRate: 3, fuelCut: false }), false);
+  assert.equal(c.update(11, { released: true, kmh: 60, fuelRate: 1.1, fuelCut: false }), false);
+  assert.equal(c.update(12, { released: true, kmh: 60, fuelRate: 0, fuelCut: true }), false);
+  // Farthållaren drar: på efter några sekunder
+  let on = null;
+  for (let t = 20; t < 30; t += 0.25) {
+    if (c.update(t, { released: true, kmh: 70, fuelRate: 5, fuelCut: false }) && on == null) on = t;
+  }
+  assert.ok(on != null && on - 20 >= 2.9 && on - 20 <= 3.5, `på efter ${on - 20} s`);
+  // Pedalen nedtryckt: ingen farthållare (gasen syns ändå)
+  assert.equal(c.update(31, { released: false, kmh: 70, fuelRate: 5, fuelCut: false }), false);
+  // Farthållaren av (broms): bränslet stängs av eller går ner till tomgång
+  for (let t = 40; t < 45; t++) c.update(t, { released: true, kmh: 70, fuelRate: 5, fuelCut: false });
+  assert.equal(c.on, true);
+  assert.equal(c.update(46, { released: true, kmh: 68, fuelRate: 0, fuelCut: true }), false);
+  // Låg fart räknas inte
+  for (let t = 50; t < 60; t++) c.update(t, { released: true, kmh: 15, fuelRate: 5, fuelCut: false });
+  assert.equal(c.on, false);
+});
+
+test('slingan: med farthållaren räknas gasen inte som släppt', async () => {
+  // Pedal D i viloläge (0 %), högt luftflöde: farthållaren drar
+  const tr = fakeElm({ sup40: '414000800000', maf: '411007D0' });
+  const s = new ElmSession(tr);
+  await s.init();
+  const samples = [];
+  let now = 1000;
+  const poller = new ObdPoller(s, x => { samples.push(x); if (samples.length >= 60) poller.stop(); }, { now: () => (now += 100) });
+  await poller.loop();
+  const last = samples[samples.length - 1];
+  assert.equal(last.pedalReleased, true);
+  assert.equal(last.cruise, true);
+  assert.equal(last.released, false);
+  assert.equal(samples[0].cruise, false, 'inte direkt');
+});
+
+test('värden som slutat svara prövas igen efter en stund', async () => {
+  const tr = fakeElm({ sup40: '414000800000' });
+  const s = new ElmSession(tr);
+  await s.init();
+  let now = 1000;
+  const poller = new ObdPoller(s, () => {}, { now: () => now });
+  poller.prio = []; poller.rest = [0x07];
+  for (let i = 0; i < 3; i++) await poller.readOther(now);
+  assert.equal(poller.nextOther(now + 1000), null, 'hoppas över');
+  assert.equal(poller.nextOther(now + 31000), 0x07, 'prövas igen efter 30 s');
+  await poller.readOther(now + 31000);
+  assert.equal(poller.nextOther(now + 61000 + 1000), null, 'nästa väntan är längre');
+  assert.equal(poller.nextOther(now + 31000 + 60000), 0x07);
 });

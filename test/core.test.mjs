@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRoute, matchToRoute, curveTargets, gradeAt } from '../js/route.js';
+import { buildRoute, matchToRoute, curveTargets, gradeAt, gradeAvg } from '../js/route.js';
 import { releasePoint, coastDistance, fitAC, decel, DEFAULT_MODEL } from '../js/physics.js';
 import { parseMaxspeed, assignLimits, buildTargets, mergeTargets, countKinds } from '../js/osm.js';
 import { CoastRecorder, analyzeRun, combineRuns } from '../js/calibration.js';
@@ -282,4 +282,20 @@ test('under rullning varnar motorn för broms om modellen visar att farten inte 
   ({ view } = e.update({ t, ...at(e.s + 20), speed: 78 / 3.6, accuracy: 5 }));
   assert.equal(view.mode, 'coasting');
   assert.ok(view.brakeNeeded);
+});
+
+test('gasrådets lutning: höjddatans hopp jämnas ut, jämn backe behålls', () => {
+  // 2 km rakt norrut, 1 % uppför, med ett hopp på 8 m i höjddatan vid 1 km
+  const coords = [];
+  for (let i = 0; i <= 200; i++) {
+    const s = i * 10;
+    const ele = 300 + 0.01 * s + (s >= 1000 && s < 1060 ? 8 : 0);
+    coords.push([14.7, 63.1 + s / 111320, ele]);
+  }
+  const r = buildRoute(coords);
+  const peak = Math.max(...[960, 980, 1000, 1020, 1040].map(s => Math.abs(gradeAt(r, s))));
+  const peakAvg = Math.max(...[960, 980, 1000, 1020, 1040].map(s => Math.abs(gradeAvg(r, s))));
+  assert.ok(peak > 0.05, `kort lutning ${peak}`);
+  assert.ok(peakAvg < 0.03, `medellutning ${peakAvg}`);
+  assert.ok(Math.abs(gradeAvg(r, 500) - 0.01) < 0.002);
 });
