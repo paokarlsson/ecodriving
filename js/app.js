@@ -1,9 +1,11 @@
 // Bromsfri körning – appens vyer och flöden.
-import { haversine } from './geo.js';
-import { store, maskKey, DEFAULT_SETTINGS, osmCache } from './store.js';
+import { haversine, angleDiff, headingXY } from './geo.js';
+import { store, maskKey, DEFAULT_SETTINGS, osmCache, netCache } from './store.js';
 import { getRoute, geocode, testKey, elevations, ApiError } from './api.js';
-import { buildRoute, headingAt, xyAt, curveTargets, gradeAt } from './route.js';
-import { fetchOsmAlongRoute, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
+import { buildRoute, headingAt, xyAt, curveTargets, gradeAt, matchToRoute, latLonAt } from './route.js';
+import { fetchOsmAlongRoute, fetchOsmNetwork, cellsAround, assignLimits, buildTargets, countKinds, kindLabel } from './osm.js';
+import { buildNetwork, buildHorizon, HORIZON } from './horizon.js';
+import { PedalModel, recommendGas, gasWithin, gasHint } from './gasadvice.js';
 import { DEFAULT_MODEL, decel } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
 import { DriveEngine, releaseMessage, travelHeading } from './drive.js';
@@ -749,13 +751,16 @@ $('ov-start').addEventListener('click', () => startDrive());
 
 function startDrive() {
   if (!plan) return;
-  setTripStage('driving');
+  if (!plan.free) setTripStage('driving');
   unlockAudio();
   if (needsMotionPermission()) requestMotionPermission();
   const s = store.settings;
   drive.baseModel = model();
   drive.liveAdj = null;
-  drive.engine = new DriveEngine(plan.route, plan.targets, drive.baseModel, { marginS: s.marginS });
+  drive.engine = new DriveEngine(plan.route, plan.targets, drive.baseModel, { marginS: s.marginS, endless: !!plan.free });
+  resetFree();
+  drive.pedalModel = new PedalModel(store.pedalModel);
+  drive.gasRec = null; drive.gasIn = 0; drive.gasTotal = 0; drive.gasPrev = null; drive.gasLastT = null;
   resetSpeedGraph();
   drive.coastStart = null;
   drive.rerouting = false;
@@ -779,7 +784,7 @@ function startDrive() {
   drive.accWarned = false;
   resetDriveObd();
   drive.log = new DriveLog({
-    kind: 'drive',
+    kind: plan.free ? 'free' : 'drive',
     dest: plan.dest ? { name: plan.dest.name, lat: plan.dest.lat, lon: plan.dest.lon } : null,
     demo: !!plan.demo,
     settings: { ...store.settings },
@@ -848,6 +853,7 @@ function saveDriveLog(stats = null) {
   }
   const m = drive.meter;
   if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, method: 'interval', date: new Date().toISOString() };
+  if (stats && drive.pedalModel && !plan?.demo) store.pedalModel = drive.pedalModel.toJSON();
   if (stats && m?.fwd && !plan?.demo) store.accAxis = { axis: m.fwd, r2: m.fwdR2, date: new Date().toISOString() };
   if (stats) drive.log.finish({
     ...stats, curves: (drive.curveLog || []).length,
@@ -856,6 +862,8 @@ function saveDriveLog(stats = null) {
     accAxis: m?.fwd ? m.fwd.map(x => Math.round(x * 1e5) / 1e5).join(',') : null, accAxisR2: m?.fwdR2 ?? null,
     coastFound: drive.coastFound ?? 0, coastUsed: drive.coastUsed ?? 0,
     obd: drive.obdUsed ? obdSummary() : null,
+    gasWithinPct: drive.gasTotal > 10 ? Math.round(100 * drive.gasIn / drive.gasTotal) : null,
+    horizons: plan?.free ? drive.free.builds : undefined,
     modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
   logStore.save(drive.log);
@@ -910,6 +918,236 @@ function stopDrive() {
   drive.stops.forEach(f => f());
   drive.stops = [];
   drive.sim = null;
+}
+
+// ---------- Körning utan rutt ----------
+// Vägen framåt räknas fram ur OSM:s vägnät runt bilen (horizon.js) och blir
+// en vanlig rutt för körmotorn, så att släpp-signaler, kurvor, gränser och
+// rullmodellen fungerar som med rutt. När bilen svänger av, eller närmar sig
+// slutet av vägen framåt, räknas en ny fram.
+const FREE = {
+  netRadius: 1300,    // m: vägnät som ska finnas runt bilen
+  keepRadius: 2600,   // m: vägnät längre bort släpps
+  retryMs: 30000,     // ms innan celler som inte gick att hämta försöks igen
+  rebuildMs: 1500,    // ms mellan omräkningar
+  nearEnd: 700,       // m kvar av vägen framåt då den förlängs
+  offDist: 20,        // m från vägen framåt (plus GPS-noggrannheten, högst 20 m)
+  offAngle: 50,       // grader mellan färdriktning och väg
+  trailStep: 10,      // m mellan punkter i spåret på kartan
+  trailKeep: 3000,    // m spår
+};
+
+function resetFree() {
+  drive.free = {
+    cells: new Map(), failed: new Map(), loading: false, net: null, roads: [],
+    builtAt: 0, builds: 0, dist: 0, trail: [], trailLen: 0, startWall: Date.now() / 1000, lastKey: null,
+  };
+}
+
+$('free-btn').addEventListener('click', startFreeDrive);
+
+/** Plan utan resmål: en rak bit väg tills vägnätet och färdriktningen är kända. */
+function startFreeDrive() {
+  plan = { free: true, dest: null, demo: false, warnings: [], elements: [], horizon: null, coverage: null, osmStats: null };
+  Object.assign(plan, freeRouteParts(null, drive.lastObs || { lat: 0, lon: 0 }, 0));
+  startDrive();
+}
+
+/** Rak väg längs kursen när vägen framåt inte är känd. */
+function straightCoords(lat, lon, heading, len = 300) {
+  const r = heading * Math.PI / 180;
+  const dLat = Math.cos(r) * len / 111320;
+  const dLon = Math.sin(r) * len / (111320 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+  return [[lon, lat], [lon + dLon, lat + dLat]];
+}
+
+/** Rutt, gränser, mål och kurvor för vägen framåt (h = null: rak väg utan mål). */
+function freeRouteParts(h, obs, heading) {
+  const route = buildRoute(h ? h.coords : straightCoords(obs.lat, obs.lon, heading ?? 0));
+  const els = drive.free?.elements || [];
+  const set = planSettings();
+  const rawLimits = els.length ? assignLimits(route, els) : new Array(route.n).fill(null);
+  const limits = rawLimits;
+  let targets = [], curves = [];
+  if (h) {
+    targets = buildTargets(route, els, limits, { ...set, noEnd: true, minTargetS: 5, skipStart: 0 });
+    curves = curveTargets(route, set.aLat, { limits, skipStart: 0 });
+    for (const t of targets) [t.lat, t.lon] = latLonAt(route, t.s);
+  }
+  return { route, rawLimits, limits, targets, curves, horizon: h };
+}
+
+/** Vägnätet runt bilen: hämtas i bakgrunden, cellerna sparas i telefonen. */
+function ensureNetwork(obs) {
+  const f = drive.free;
+  if (f.loading || obs.accuracy > 60) return;
+  const now = Date.now();
+  const want = cellsAround(obs.lat, obs.lon, FREE.netRadius);
+  // Närmast först: de första fyra cellerna i ett eget anrop, sedan tolv i taget
+  const missing = want.filter(k => !f.cells.has(k) && !(f.failed.get(k) > now - FREE.retryMs))
+    .slice(0, f.cells.size ? 12 : 4);
+  if (!missing.length) return;
+  f.loading = true;
+  const engine = drive.engine;
+  fetchOsmNetwork(missing, { cache: netCache }).then(res => {
+    if (drive.engine !== engine) return;
+    for (const k of missing) {
+      if (res.failed.includes(k)) f.failed.set(k, Date.now());
+      else f.cells.set(k, true);
+    }
+    const keep = new Set(cellsAround(obs.lat, obs.lon, FREE.keepRadius));
+    for (const k of [...f.cells.keys()]) if (!keep.has(k)) f.cells.delete(k);
+    const all = new Map((f.elements || []).map(e => [e.type + e.id, e]));
+    for (const e of res.elements) all.set(e.type + e.id, e);
+    // Släpp element som ligger helt utanför de celler som finns kvar
+    const near = e => {
+      const p = e.type === 'node' ? e : (e.geometry || [])[0];
+      return p && haversine(p.lat, p.lon, obs.lat, obs.lon) < FREE.keepRadius + 1500;
+    };
+    f.elements = [...all.values()].filter(near);
+    f.net = buildNetwork(f.elements, obs.lat, obs.lon);
+    f.roads = f.net.ways.map(w => w.g);
+    f.builtAt = 0;   // räkna om vägen framåt med det nya vägnätet
+    drive.log?.event(drive.lastObs?.t ?? Date.now() / 1000, 'network', {
+      cells: f.cells.size, fetched: res.fetched.length, failed: res.failed.length, error: res.error, ways: f.net.ways.length,
+    });
+    if (res.failed.length && !f.netToast) { f.netToast = true; toast(`Vägdata gick inte att hämta (${res.error}). Försöker igen.`, true); }
+  }).catch(e => {
+    for (const k of missing) f.failed.set(k, Date.now());
+    drive.log?.event(drive.lastObs?.t ?? Date.now() / 1000, 'network', { error: e.message });
+  }).finally(() => { f.loading = false; });
+}
+
+/**
+ * Före varje position: behövs en ny väg framåt? Bilen har lämnat den, är
+ * nära slutet, eller vägnätet har kommit. force = körmotorn har sett att
+ * bilen är utanför.
+ */
+function updateFree(obs, prevObs, force = false) {
+  const f = drive.free;
+  if (!f) return;
+  if (prevObs && (obs.accuracy ?? 0) < 30) {
+    const d = haversine(prevObs.lat, prevObs.lon, obs.lat, obs.lon);
+    if (d < 200) f.dist += d;
+  }
+  const last = f.trail[f.trail.length - 1];
+  const step = last ? haversine(last.lat, last.lon, obs.lat, obs.lon) : Infinity;
+  if (step >= FREE.trailStep && (obs.accuracy ?? 0) < 30) {
+    f.trail.push({ lat: obs.lat, lon: obs.lon, d: step === Infinity ? 0 : step });
+    f.trailLen += step === Infinity ? 0 : step;
+    while (f.trail.length > 2 && f.trailLen > FREE.trailKeep) f.trailLen -= f.trail.shift().d || 0;
+  }
+  ensureNetwork(obs);
+  const heading = travelHeading(drive.trail, obs);
+  const moving = (obs.speed ?? 0) >= HORIZON.minSpeed;
+  let need = force || f.builtAt === 0 || !plan.horizon;
+  let urgent = need;
+  if (!need) {
+    const m = matchToRoute(plan.route, obs.lat, obs.lon, drive.engine.sHint);
+    const tol = FREE.offDist + Math.min(20, obs.accuracy ?? 0);
+    const off = !m || m.dist > tol || (heading != null && moving && angleDiff(heading, headingAt(plan.route, m.s)) > FREE.offAngle);
+    const left = m ? plan.route.length - m.s : 0;
+    need = off || left < (plan.horizon.reason === 'length' ? FREE.nearEnd : 15);
+    urgent = off;
+  }
+  if (!need) return;
+  if (heading == null || (!moving && plan.horizon)) {
+    // Ingen färdriktning än: behåll det som finns, men flytta den raka biten till bilen
+    if (!plan.horizon && (f.builtAt === 0 || haversine(plan.route.pts[0].lat, plan.route.pts[0].lon, obs.lat, obs.lon) > 50)) setFreeRoute(null, obs, heading ?? 0);
+    return;
+  }
+  // Avsvängd: räkna om direkt. Förlängning och försök utan känd väg högst var 1,5 s.
+  if (!urgent && Date.now() - f.builtAt < FREE.rebuildMs) return;
+  const h = f.net ? buildHorizon(f.net, obs.lat, obs.lon, heading) : null;
+  setFreeRoute(h, obs, heading);
+}
+
+function setFreeRoute(h, obs, heading) {
+  const f = drive.free;
+  f.builtAt = Date.now();
+  f.builds++;
+  const parts = freeRouteParts(h, obs, heading);
+  plan = { ...plan, ...parts, elements: f.elements || [] };
+  if (drive.engine) {
+    drive.engine.setRoute(plan.route, plan.targets);
+    drive.tracker = new CurveTracker(plan.route, plan.curves, planSettings().aLat);
+  }
+  // Logga när vägen framåt blir en annan (inte varje förlängning)
+  const key = h ? `${h.wayId}|${h.reason}` : 'none';
+  if (key !== f.lastKey) {
+    f.lastKey = key;
+    drive.log?.event(obs.t, 'horizon', {
+      lat: obs.lat, lon: obs.lon, heading, found: !!h, name: h?.name ?? null, reason: h?.reason ?? null,
+      lengthM: h ? Math.round(h.length) : null, targets: plan.targets.map(t => `${t.kind}@${Math.round(t.s)}:${Math.round(t.v * 3.6)}`).join(' '),
+    });
+  }
+}
+
+/** Raden under ringen utan rutt: vägens namn och gräns, eller vad som saknas. */
+function freeRoadText(view) {
+  const f = drive.free;
+  if (!f.net) return f.loading ? 'Hämtar vägnätet…' : '';
+  if (!plan.horizon) return (view.v || 0) < HORIZON.minSpeed ? 'Vägen framåt visas när du kör' : 'Ingen känd väg här';
+  const i = Math.min(plan.route.n - 1, Math.max(0, Math.round((view.s || 0) / plan.route.step)));
+  const lim = plan.limits[i];
+  return [plan.horizon.name, lim != null ? `${lim} km/h` : null].filter(Boolean).join(' · ');
+}
+
+// ---------- Rekommenderat gaspådrag ----------
+/** Räknar rekommendationen för läget; gasraden ritas av renderGas. */
+function updateGasRec(view) {
+  if (!plan || !drive.pedalModel) return;
+  const s = view.s || 0;
+  const i = Math.min(plan.route.n - 1, Math.max(0, Math.round(s / plan.route.step)));
+  const cur = (plan.curves || []).find(c => s >= c.s - 10 && s <= c.sEnd);
+  const paused = view.mode === 'paused' || view.paused;
+  drive.gasRec = paused ? { kind: 'none' } : recommendGas(drive.pedalModel, {
+    kmh: (view.v || 0) * 3.6, mode: view.mode, distToRelease: view.distToRelease ?? null,
+    limitKmh: plan.limits[i] ?? null, curveKmh: cur ? cur.v * 3.6 : null,
+    grade: plan.route.hasEle ? gradeAt(plan.route, s) : 0,
+  });
+  renderGas();
+}
+
+function renderGas() {
+  const on = obdActive() && !!drive.engine;
+  const rec = drive.gasRec;
+  const show = on && rec && rec.kind !== 'none';
+  $('d-gas').hidden = !show;
+  $('d-gashint').hidden = !show;
+  if (!show) return;
+  const o = obd.last;
+  const p = Math.max(0, Math.min(100, o.pedal ?? 0));
+  const ok = gasWithin(rec, p, o.released);
+  $('d-gas').classList.toggle('ok', !!ok);
+  $('d-gascur').style.width = `${p}%`;
+  $('d-gasrec').style.left = `${rec.lo}%`;
+  $('d-gasrec').style.width = `${Math.max(0, rec.hi - rec.lo)}%`;
+  $('d-gasmark').style.left = `${rec.mid}%`;
+  $('d-gastext').textContent = `${Math.round(p)} % · rek. ${Math.round(rec.mid)} %`;
+  $('d-gashint').textContent = gasHint(rec, p, o.released) + (rec.learned === false && rec.kind !== 'release' ? ' (typvärde)' : '');
+}
+
+/** Varje OBD-värde: lär pedalmodellen och räkna tiden inom rekommendationen. */
+function gasObd(s) {
+  if (!drive.engine || !drive.pedalModel) return;
+  const prev = drive.gasPrev;
+  if (s.kmh != null && (!prev || s.t - prev.t >= 1)) {
+    if (prev && s.t - prev.t <= 3 && prev.kmh != null && !s.released) {
+      const a = (s.kmh - prev.kmh) / 3.6 / (s.t - prev.t);
+      const sNow = drive.engine.s || 0;
+      const grade = plan?.route?.hasEle ? gradeAt(plan.route, sNow) : 0;
+      if (!plan?.demo) drive.pedalModel.learn((s.kmh + prev.kmh) / 2, a, s.pedal, grade);
+    }
+    drive.gasPrev = { t: s.t, kmh: s.kmh };
+  }
+  const within = gasWithin(drive.gasRec, s.pedal, s.released);
+  const dt = drive.gasLastT != null ? Math.min(2, s.t - drive.gasLastT) : 0;
+  drive.gasLastT = s.t;
+  if (within != null && dt > 0) {
+    drive.gasTotal += dt;
+    if (within) drive.gasIn += dt;
+  }
 }
 
 // ---------- Kurvkraft ----------
@@ -1152,7 +1390,9 @@ function onDriveObs(obs) {
   drive.lastObs = obs;
   drive.obsWall = Date.now() / 1000;
   if (!plan.demo) drive.raw?.addGps(obs);
+  if (plan.free) updateFree(obs, prevObs);
   const { view, events } = drive.engine.update(obs);
+  if (plan.free) drive.engine.stats.distance = drive.free.dist;
   recordSpeed(view, obs);
   if (!plan.demo && drive.meter) {
     const onRoute = !view.paused && view.mode !== 'paused';
@@ -1180,7 +1420,7 @@ function onDriveObs(obs) {
   for (const ev of events) handleDriveEvent(ev, obs);
   if (drive.engine) {
     // Fortfarande utanför rutten: försök igen om förra försöket misslyckades.
-    if (drive.engine.paused === 'offroute') {
+    if (drive.engine.paused === 'offroute' && !plan.free) {
       if (!events.some(e => e.type === 'offroute')) reroute(obs);
     } else drive.rerouteTries = 0;
     renderDrive(view, obs);
@@ -1211,6 +1451,7 @@ function logDrive(view, obs, events) {
     coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
     heading: obs.heading,
     ...obdFields(),
+    gasRec: obdActive() && drive.gasRec ? (drive.gasRec.kind === 'none' ? null : drive.gasRec.mid) : null,
   });
   for (const ev of events) {
     const tg = ev.target;
@@ -1240,6 +1481,7 @@ function handleDriveEvent(ev, obs) {
       if (drive.sim) drive.sim.onRelease(ev.target);
       break;
     case 'pause':
+      if (plan?.free && ev.reason === 'offroute') break;
       if (!drive.muted) sounds.pause();
       say(ev.reason === 'gps' ? 'Pausad, svag GPS' : 'Pausad');
       break;
@@ -1247,7 +1489,8 @@ function handleDriveEvent(ev, obs) {
       if (!drive.muted) sounds.resume();
       break;
     case 'offroute':
-      reroute(obs);
+      if (plan?.free) updateFree(obs, null, true);
+      else reroute(obs);
       break;
     case 'follow':
       drive.reactions.push({ afterS: ev.afterS ?? null, followed: ev.followed, byPedal: !!ev.byPedal });
@@ -1275,7 +1518,7 @@ function rerouteWait(tries) {
 }
 
 async function reroute(obs) {
-  if (plan.demo || !store.key || drive.rerouting) return;
+  if (plan.demo || plan.free || !store.key || drive.rerouting) return;
   if (Date.now() - drive.lastReroute < rerouteWait(drive.rerouteTries)) return;
   drive.rerouting = true;
   drive.lastReroute = Date.now();
@@ -1325,11 +1568,16 @@ function setRing(mode, main, sub, progress) {
 function renderDrive(view, obs = null) {
   drive.lastView = view;
   $('d-speed').textContent = kmh(view.v || 0);
-  $('d-remaining').textContent = view.remaining != null ? fmtDist(view.remaining) + ' kvar' : '';
+  if (plan?.free) {
+    const secs = Math.max(0, Math.round(Date.now() / 1000 - drive.free.startWall));
+    const mm = String(Math.floor(secs / 60)).padStart(2, '0'), ss = String(secs % 60).padStart(2, '0');
+    $('d-remaining').innerHTML = `<span class="rec-dot small" aria-hidden="true"></span>${mm}:${ss} · ${esc(fmtDist(drive.free.dist) || '0 m')}`;
+  } else $('d-remaining').textContent = view.remaining != null ? fmtDist(view.remaining) + ' kvar' : '';
   let target = '';
   switch (view.mode) {
     case 'free':
-      setRing('free', 'Fri väg', view.next && view.distToNext != null ? `${kindLabel(view.next.kind)} om ${fmtDist(view.distToNext)}` : '', 0);
+      setRing('free', plan?.free ? 'Utan rutt' : 'Fri väg', view.next && view.distToNext != null ? `${kindLabel(view.next.kind)} om ${fmtDist(view.distToNext)}` : '', 0);
+      if (plan?.free) target = freeRoadText(view);
       break;
     case 'approach':
       setRing('approach', 'Släpp om', fmtDist(view.distToRelease), 1 - view.distToRelease / 800);
@@ -1353,6 +1601,7 @@ function renderDrive(view, obs = null) {
   }
   $('d-target').textContent = target;
   renderSigns(view);
+  updateGasRec(view);
   renderObdDrive();
   if (plan) {
     const s = view.s || 0;
@@ -1363,7 +1612,9 @@ function renderDrive(view, obs = null) {
     else {
       const moving = (view.v || 0) > 3;
       const heading = moving || drive.compass == null ? smoothHeading(plan.route, s) : drive.compass;
-      drawDrive($('d-map'), plan.route, plan.targets, s, heading, { limits: plan.limits, curves: plan.curves });
+      const free = plan.free ? { roads: drive.free.roads, trail: drive.free.trail, horizon: !!plan.horizon } : null;
+      const hd = plan.free && drive.lastObs ? (travelHeading(drive.trail, drive.lastObs) ?? heading) : heading;
+      drawDrive($('d-map'), plan.route, plan.targets, s, hd, { limits: plan.limits, curves: plan.curves, free });
     }
   }
 }
@@ -1504,7 +1755,7 @@ $('d-stop').addEventListener('click', () => {
   if (stats) { drive.log?.event(drive.lastObs?.t ?? Date.now() / 1000, 'stopped', { s: drive.engine.s }); saveDriveLog(stats); }
   stopDrive();
   drive.engine = null;
-  if (stats && (stats.signals > 0 || (drive.curveLog || []).length)) showSummary(stats);
+  if (stats && (plan?.free || stats.signals > 0 || (drive.curveLog || []).length)) showSummary(stats);
   else back();
 });
 window.addEventListener('resize', () => {
@@ -1513,13 +1764,19 @@ window.addEventListener('resize', () => {
 
 // ---------- Sammanfattning ----------
 function showSummary(st) {
-  const mins = st.endT != null && st.startT != null ? Math.round((st.endT - st.startT) / 60) : null;
+  const secs = st.endT != null && st.startT != null ? st.endT - st.startT : null;
+  const mins = secs != null ? Math.round(secs / 60) : null;
   const pct = st.signals ? Math.round(100 * st.followed / st.signals) : 0;
+  const free = !!plan?.free;
+  $('sum-title').textContent = free ? 'Körning utan rutt' : 'Framme';
+  const avg = secs > 30 && st.distance > 100 ? `${Math.round(st.distance / secs * 3.6)} km/h` : null;
+  const gasPct = drive.gasTotal > 10 ? Math.round(100 * drive.gasIn / drive.gasTotal) : null;
   $('sum-stats').innerHTML = [
+    ...(free ? [[fmtDist(st.distance) || '0 m', 'körd sträcka'], [mins != null ? `${mins} min` : '–', 'tid'], ...(avg ? [[avg, 'snittfart']] : [])] : []),
+    ...(gasPct != null ? [[`${gasPct} %`, 'av tiden inom rekommenderat gaspådrag']] : []),
     [st.signals, 'släpp-signaler'],
     [`${st.followed}`, `följda (${pct} %)`],
-    [fmtDist(st.distance), 'körd sträcka'],
-    [mins != null ? `${mins} min` : '–', 'tid'],
+    ...(free ? [] : [[fmtDist(st.distance), 'körd sträcka'], [mins != null ? `${mins} min` : '–', 'tid']]),
     [st.late, 'sena signaler'],
     [st.brakeWarnings, 'backvarningar'],
     [`${drive.coastUsed ?? 0} / ${drive.coastFound ?? 0}`, 'rullningar använda / mätta'],
@@ -1606,98 +1863,6 @@ function bindRange(id, key, fmt, s) {
 $('set-voice').addEventListener('change', e => { store.settings = { ...store.settings, voice: e.target.checked }; });
 
 $('set-logs').addEventListener('click', () => show('logs'));
-
-// ---------- Inspelning utan rutt ----------
-const rec = { log: null, raw: null, meter: null, stops: [], dist: 0, last: null, startT: null, courseRate: 0, savedAt: 0, timer: null };
-
-$('rec-btn').addEventListener('click', startRecording);
-
-async function startRecording() {
-  unlockAudio();
-  if (needsMotionPermission()) await requestMotionPermission();
-  persistStorage();
-  Object.assign(rec, { dist: 0, last: null, startT: Date.now() / 1000, courseRate: 0, lastGps: null });
-  rec.log = new DriveLog({ kind: 'recording', settings: { ...store.settings }, model: { ...model(), source: modelSource() } });
-  rec.raw = new RawRecorder(rec.log.id);
-  rec.meter = new LateralMeter();
-  const ga = store.gyroAxis;
-  if (ga && ga.method === 'interval' && Array.isArray(ga.axis)) { rec.meter.axis = ga.axis; rec.meter.axisR2 = ga.r2; }
-  useAccAxis(rec.meter);
-  rec.savedAt = Date.now();
-  rec.stops.push(keepAwake());
-  rec.stops.push(watchGps(onRecGps, e => toast(e.message, true)));
-  rec.stops.push(watchMotion(onRecMotion));
-  rec.stops.push(watchCompass(h => rec.raw?.addCompass(Date.now() / 1000, h)));
-  rec.timer = setInterval(renderRecording, 1000);
-  rec.stops.push(() => clearInterval(rec.timer));
-  show('record');
-  renderRecording();
-}
-
-function onRecGps(o) {
-  rec.raw?.addGps(o);
-  const v = o.speed ?? 0;
-  rec.meter.setSpeed(v);
-  // Sträcka och GPS-kursens ändring (för att lära gyrots axel utan rutt)
-  if (rec.last && o.accuracy != null && o.accuracy < 30) {
-    const d = haversine(rec.last.lat, rec.last.lon, o.lat, o.lon);
-    if (d < 200) rec.dist += d;
-  }
-  if (learnGyroFromGps(rec.meter, rec.last, o)) {
-    store.gyroAxis = { axis: rec.meter.axis, r2: rec.meter.axisR2, method: 'interval', date: new Date().toISOString() };
-    rec.log.event(o.t, 'gyroAxis', { axis: rec.meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(','), r2: rec.meter.axisR2 });
-  }
-  learnAccFromGps(rec.meter, rec.last, o, rec.log);
-  rec.last = o;
-  const m = rec.meter.current();
-  rec.log.sample(o.t, { s: rec.dist, lat: o.lat, lon: o.lon, kmh: v * 3.6, acc: o.accuracy, mode: 'rec', g: m.g, side: m.side, lonG: m.lonG, alt: o.alt, heading: o.heading, ...obdFields() });
-  if (Date.now() - rec.savedAt > 30000) { logStore.save(rec.log); rec.savedAt = Date.now(); }
-}
-
-function onRecMotion(m) {
-  rec.raw?.addMotion(m);
-  if (!rec.meter) return;
-  rec.meter.addMotion(m);
-}
-
-function renderRecording() {
-  if (!rec.log) return;
-  const o = rec.last;
-  const secs = Math.round(Date.now() / 1000 - rec.startT);
-  const c = rec.raw ? rec.raw.counts : { gps: 0, motion: 0 };
-  const hz = secs > 0 ? Math.round(c.motion / secs) : 0;
-  const m = rec.meter.current();
-  $('rec-speed').textContent = o && o.speed != null ? Math.round(o.speed * 3.6) : '–';
-  const mm = String(Math.floor(secs / 60)).padStart(2, '0'), ss = String(secs % 60).padStart(2, '0');
-  $('rec-stats').innerHTML = [
-    [`${mm}:${ss}`, 'tid'],
-    [fmtDist(rec.dist) || '0 m', 'sträcka'],
-    [o ? `±${Math.round(o.accuracy)} m` : '–', 'GPS-noggrannhet'],
-    [`${c.gps}`, 'GPS-punkter'],
-    [`${hz} /s`, 'sensorvärden'],
-    [fmtG(m.g), rec.meter.axis ? 'sidokraft' : 'sidokraft (gyrot lär sig)'],
-  ].map(([b, t]) => `<div class="stat"><b>${esc(b)}</b><span>${esc(t)}</span></div>`).join('');
-}
-
-$('rec-stop').addEventListener('click', async () => {
-  if (!rec.log) return;
-  rec.stops.forEach(f => f());
-  rec.stops = [];
-  const log = rec.log, raw = rec.raw, meter = rec.meter;
-  rec.log = null; rec.raw = null;
-  if (meter?.axis) store.gyroAxis = { axis: meter.axis, r2: meter.axisR2, method: 'interval', date: new Date().toISOString() };
-  log.finish({
-    distance: rec.dist, durationS: Date.now() / 1000 - rec.startT,
-    gyroAxis: meter?.axis ? meter.axis.map(x => Math.round(x * 1e5) / 1e5).join(',') : null,
-    gyroAxisR2: meter?.axisR2 ?? null,
-  });
-  log.meta.raw = await raw.close();
-  logStore.save(log);
-  toast(`Inspelningen är sparad: ${fmtDist(rec.dist) || '0 m'}, ${log.meta.raw.gps} GPS-punkter, ${log.meta.raw.motion} sensorvärden.`);
-  stack.length = 0;
-  stack.push('home');
-  show('logs');
-});
 
 function enterLogs() {
   $('logs-text-card').hidden = true;
@@ -1883,10 +2048,10 @@ function pedalReleasedBetween(t0, t1) {
 function onObdSample(s) {
   obd.last = s;
   if (!$('settings').hidden) renderObdLive();
-  if (rec.log) rec.raw?.addObd(s);
   if (!drive.engine) return;
   drive.obdUsed = true;
   drive.raw?.addObd(s);
+  gasObd(s);
   // Dosans tid räknas om till GPS-tidens skala (positionernas tidsstämplar)
   const t = obsTime(s.t);
   const dt = drive.obdPrevT != null ? Math.min(2, s.t - drive.obdPrevT) : 0;
@@ -1984,6 +2149,7 @@ function renderObdDrive() {
     if (s.pedal != null) parts.push(`gas <b>${Math.round(s.pedal)} %</b>`);
     $('d-obdline').innerHTML = parts.join(' · ');
   }
+  renderGas();
   const b = drive.badge;
   const badge = $('d-badge');
   badge.hidden = !b || Date.now() > b.until;

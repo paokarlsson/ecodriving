@@ -27,6 +27,7 @@ export const SAMPLE_FIELDS = [
   'fuelLh', // bränsleflöde (l/h, OBD, beräknat ur luftflödet om bilen inte ger det)
   'maf',    // luftflöde (g/s, OBD)
   'fuelCut', // 1 = bränslet avstängt (motorbroms), 0 = inte (OBD)
+  'gasRec', // rekommenderat gaspådrag (%, OBD)
 ];
 
 /** Kompakt export: alla mätpunkter för körningar upp till så här många sekunder. */
@@ -63,7 +64,7 @@ export class DriveLog {
       p.mode ?? null, p.limit ?? null, r(p.g, 3), r(p.side, 3), r(p.rel, 0), r(p.alt, 1),
       r(p.pedal, 0), r(p.rpm, 0), r(p.obdKmh, 0),
       r(p.heading, 0), r(p.lonG, 3), r(p.coastAdj, 3), r(p.pedalRaw, 1), bit(p.gas),
-      r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut),
+      r(p.fuelLh, 2), r(p.maf, 1), bit(p.fuelCut), r(p.gasRec, 0),
     ];
     // Tomma fält i slutet tas bort (saknas = null), så loggen utan OBD blir inte större.
     while (row.length > 1 && row[row.length - 1] == null) row.pop();
@@ -110,6 +111,7 @@ export class DriveLog {
       id: this.id, kind: this.meta.kind || 'drive',
       title: this.meta.kind === 'calibration' ? 'Rullprov'
         : this.meta.kind === 'recording' ? 'Inspelning utan rutt'
+        : this.meta.kind === 'free' ? 'Körning utan rutt'
         : (this.meta.dest?.name || 'Körning'),
       startedAt: this.startedAt,
       distanceM: this.stats?.distance ?? (last ? last[1] : null),

@@ -57,7 +57,12 @@ export function drawOverview(canvas, route, targets, curves = null) {
 }
 
 /** Körkarta runt bilen, vriden så att färdriktningen pekar uppåt. */
-export function drawDrive(canvas, route, targets, s, headingDeg, { limits = null, curves = null, viewMeters = 650 } = {}) {
+/**
+ * free = {roads: [[{lat, lon}, …], …], trail: [{lat, lon}, …], horizon: bool}:
+ * körning utan rutt. Vägarna runt bilen och spåret ritas, och vägen framåt
+ * streckad (eller inte alls när den inte är känd).
+ */
+export function drawDrive(canvas, route, targets, s, headingDeg, { limits = null, curves = null, viewMeters = 650, free = null } = {}) {
   const { g, w, h } = setup(canvas);
   const i = Math.min(route.n - 1, Math.max(0, Math.round(s / route.step)));
   const cx = route.X[i], cy = route.Y[i];
@@ -72,8 +77,37 @@ export function drawDrive(canvas, route, targets, s, headingDeg, { limits = null
   };
   const back = Math.max(0, i - Math.round(200 / route.step));
   const end = Math.min(route.n - 1, i + Math.round(viewMeters * 1.2 / route.step));
-  drawRoute(g, route, P, back, i, css('--route-done', '#a0aec0'), 9);
-  drawRoute(g, route, P, i, end, css('--route', '#4a5568'), 9);
+  if (free) {
+    const far = viewMeters * 1.5;
+    const toP = p => { const [x, y] = route.proj.toXY(p.lat, p.lon); return [x, y]; };
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    g.strokeStyle = css('--line', '#dfe3df');
+    g.lineWidth = 7;
+    g.beginPath();
+    for (const way of free.roads || []) {
+      let inside = false;
+      const pts = way.map(toP);
+      for (const [x, y] of pts) if (Math.abs(x - cx) < far && Math.abs(y - cy) < far) { inside = true; break; }
+      if (!inside) continue;
+      pts.forEach(([x, y], k) => { const [a, b] = P(x, y); if (k) g.lineTo(a, b); else g.moveTo(a, b); });
+    }
+    g.stroke();
+    if (free.trail && free.trail.length > 1) {
+      g.strokeStyle = '#2f80d8';
+      g.lineWidth = 5;
+      g.beginPath();
+      free.trail.forEach((p, k) => { const [a, b] = P(...toP(p)); if (k) g.lineTo(a, b); else g.moveTo(a, b); });
+      g.stroke();
+    }
+    if (free.horizon) {
+      g.setLineDash([10, 8]);
+      drawRoute(g, route, P, i, end, css('--route', '#4a5568'), 5);
+      g.setLineDash([]);
+    }
+  } else {
+    drawRoute(g, route, P, back, i, css('--route-done', '#a0aec0'), 9);
+    drawRoute(g, route, P, i, end, css('--route', '#4a5568'), 9);
+  }
   drawTargets(g, route, targets.filter(t => t.s >= s && t.s - s < viewMeters * 1.2), P);
   const ahead = t => t >= s - 20 && t - s < viewMeters;
   // Rekommenderad kurvfart som skylt vid kurvans början

@@ -53,6 +53,9 @@ export const store = {
   /** Inlärda rullningar: {car: CoastStats-JSON}. */
   get coastLearn() { return get('coastLearn', {}); },
   set coastLearn(v) { set('coastLearn', v); },
+  /** Inlärd gaspedal för att hålla farten och accelerera (gasadvice.js). */
+  get pedalModel() { return get('pedalModel'); },
+  set pedalModel(v) { set('pedalModel', v); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },
@@ -80,7 +83,7 @@ try {
 } catch { /* blockerad lagring */ }
 const OSM_TTL = 30 * 24 * 3600 * 1000;
 
-function evictOsm(fraction = 0.5) {
+function evictOsm(fraction = 0.5, prefix = OSM_PREFIX) {
   try {
     const entries = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -97,22 +100,32 @@ function evictOsm(fraction = 0.5) {
   } catch { return false; }
 }
 
-export const osmCache = {
-  get(key) {
-    try {
-      const raw = localStorage.getItem(OSM_PREFIX + key);
-      if (!raw) return null;
-      const v = JSON.parse(raw);
-      if (!v || Date.now() - v.t > OSM_TTL) { localStorage.removeItem(OSM_PREFIX + key); return null; }
-      return v.els;
-    } catch { return null; }
-  },
-  set(key, els) {
-    const data = JSON.stringify({ t: Date.now(), els });
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try { localStorage.setItem(OSM_PREFIX + key, data); return true; }
-      catch { if (!evictOsm()) return false; }
-    }
-    return false;
-  },
-};
+/** Cache per kartcell med eget prefix i localStorage. */
+function makeCellCache(prefix) {
+  return {
+    get(key) {
+      try {
+        const raw = localStorage.getItem(prefix + key);
+        if (!raw) return null;
+        const v = JSON.parse(raw);
+        if (!v || Date.now() - v.t > OSM_TTL) { localStorage.removeItem(prefix + key); return null; }
+        return v.els;
+      } catch { return null; }
+    },
+    set(key, els) {
+      const data = JSON.stringify({ t: Date.now(), els });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { localStorage.setItem(prefix + key, data); return true; }
+        // Fullt: rensa äldsta vägnätet först (störst), sedan vägdata för rutter
+        catch { if (!evictOsm(0.5, NET_PREFIX) && !evictOsm()) return false; }
+      }
+      return false;
+    },
+  };
+}
+
+const NET_PREFIX = P + 'osmnet1.';
+/** Vägdata längs rutter (gränser, trafikljus, rondeller). */
+export const osmCache = makeCellCache(OSM_PREFIX);
+/** Hela vägnätet per cell, för körning utan rutt. */
+export const netCache = makeCellCache(NET_PREFIX);

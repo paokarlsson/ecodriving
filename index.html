@@ -124,6 +124,7 @@
         <input id="search-input" type="search" placeholder="Sök adress eller plats" enterkeyhint="search">
         <button class="btn primary small" type="submit">Sök</button>
       </form>
+      <button class="btn" id="free-btn">Kör utan rutt</button>
       <div id="install-card" class="card install" hidden>
         <p id="install-text"></p>
         <div class="row">
@@ -140,8 +141,7 @@
       <ul id="favorites" class="list"></ul>
       <h2 class="section-title" id="recent-title" hidden>Senaste</h2>
       <ul id="recents" class="list"></ul>
-      <button class="btn" id="rec-btn">Spela in körning utan rutt</button>
-      <p class="hint">Bara loggning: GPS, gyro, accelerometer och kompass sparas i telefonen. Inga signaler.</p>
+
     </div>
   </section>
 
@@ -212,6 +212,12 @@
       </div>
     </div>
     <div class="drive-target" id="d-target"></div>
+    <div class="gasbar" id="d-gas" hidden>
+      <span class="gas-lbl">Gas</span>
+      <div class="gas-track" aria-hidden="true"><div class="gas-rec" id="d-gasrec"></div><div class="gas-cur" id="d-gascur"></div><div class="gas-mark" id="d-gasmark"></div></div>
+      <b id="d-gastext"></b>
+    </div>
+    <div class="gashint" id="d-gashint" hidden></div>
     <div class="gm-row" id="d-gmeter" aria-live="off">
       <span class="gm-big" id="d-gnow">0,00 g</span>
       <span class="gm-chip" id="d-gchip">Står still</span>
@@ -230,7 +236,7 @@
 
   <!-- Sammanfattning -->
   <section class="screen" id="summary" hidden>
-    <header class="bar"><h1>Framme</h1></header>
+    <header class="bar"><h1 id="sum-title">Framme</h1></header>
     <div class="content">
       <div class="stats" id="sum-stats"></div>
       <div id="sum-obd" hidden>
@@ -356,19 +362,6 @@
         <button class="btn small ghost danger" id="set-reset">Radera allt i telefonen</button>
       </div>
       <p class="hint">Vägdata © OpenStreetMap-bidragsgivare. Rutter: openrouteservice (HeiGIT). Höjd: Open-Meteo.</p>
-    </div>
-  </section>
-
-  <!-- Inspelning utan rutt -->
-  <section class="screen" id="record" hidden>
-    <header class="bar"><h1>Inspelning</h1><span class="rec-dot" aria-hidden="true"></span></header>
-    <div class="content">
-      <div class="big-speed"><span id="rec-speed">–</span><small>km/h</small></div>
-      <div class="stats" id="rec-stats"></div>
-      <p class="hint">Allt sparas i telefonen medan du kör. Skärmen hålls vaken. Rör inte telefonen under körning.</p>
-    </div>
-    <div class="actions">
-      <button class="btn primary" id="rec-stop">Avsluta och spara</button>
     </div>
   </section>
 

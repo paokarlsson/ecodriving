@@ -76,14 +76,14 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 - **Spara fil / Dela**: samma sak med alla mätpunkter (en per sekund).
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
-`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s) och `fuelCut` (1 = bränslet avstängt). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
+`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt) och `gasRec` (rekommenderat gaspådrag, %). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute` (med färdriktning och antal försök), `rerouteFailed`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Testbana
 
 Den korta testbanan (på sidan Koppla OpenRouteService, under fältet för nyckeln) kräver ingen nyckel. En simulerad bil kör den i fyrdubbel fart; knappen i körvyn ändrar farten (1×, 4×, 8×, 16×). Appen lär sig inte av testkörningar.
 
-## Rådata och inspelning utan rutt
+## Rådata
 
 Varje riktig körning sparar också all rådata i telefonens databas (IndexedDB, eftersom localStorage bara rymmer ca 5 MB):
 
@@ -96,7 +96,28 @@ Varje riktig körning sparar också all rådata i telefonens databas (IndexedDB,
 
 `t` är sekunder sedan starten. *Spara fil* / *Dela* i körloggarna ger loggen med rådatan under `raw`; *Kopiera för analys* är som förut kompakt utan rådata. Rådatan raderas tillsammans med sin logg, och de 10 senaste loggarna sparas.
 
-**Spela in körning utan rutt** (hemskärmen): bara loggning, inga signaler. Visar tid, sträcka, GPS-noggrannhet, antal punkter, sensorfrekvens och sidokraft; gyrots axel lärs in mot GPS-kursen.
+## Kör utan rutt
+
+*Kör utan rutt* på startsidan ger samma körvy som med rutt, utan resmål och utan OpenRouteService-nyckel. Allt loggas som vid en vanlig körning (logg och rådata), och rullmodellen, gyrot och pedalmodellen lär sig som vanligt.
+
+- **Vägnätet** runt bilen (alla körbara vägar, ca 1,3 km åt varje håll) hämtas från Overpass i samma rutor som vägdatan för rutter, närmast först, och sparas i telefonen i 30 dagar (eget förråd, `osmnet1.`). Vägnät längre bort än ca 2,6 km släpps under körningen.
+- **Vägen framåt** (`js/horizon.js`): bilen matchas mot närmaste väg som går åt färdriktningen (enkelriktat respekteras). Därifrån följer appen samma väg, annars samma vägnamn, annars den väg som går rakt fram (högst 45° sväng och minst 30° rakare än nästa). In- och utfarter (`service`, `track`) räknas inte som val. Vägen framåt slutar efter 1,5 km, i en T-korsning, där två vägar är lika raka, strax in i en rondell eller där vägen tar slut.
+- Vägen framåt blir en vanlig rutt för körmotorn: trafikljus, stopp, väjning, rondeller, kurvor och sänkta gränser ger släpp-signaler som med rutt. När bilen lämnar vägen framåt (mer än 20 m + GPS-noggrannheten, eller kursen skiljer mer än 50°) räknas en ny fram direkt; den förlängs när mindre än 700 m återstår. Ett mål som redan har gett signal känns igen på platsen och signaleras inte igen, och en pågående rullning fortsätter.
+- Utan känd väg (vägnätet saknas, eller bilen står still) visas hastighetsgränsen om den är känd men inga mål.
+- **Körvyn**: tid och sträcka i stället för kvar, ringen säger *Utan rutt*, raden under ringen visar vägens namn och gräns, och kartan visar vägarna runt bilen, ditt spår (blått, ca 3 km) och vägen framåt streckad.
+- **Sammanfattningen** visas alltid: sträcka, tid, snittfart, signaler, bränsle och motorbroms.
+- Loggen har `kind: "free"`, händelserna `network` (hämtat vägnät) och `horizon` (ny väg framåt: namn, orsak till slutet, längd och mål), och `stats.horizons` (antal omräkningar).
+
+## Rekommenderat gaspådrag (OBD)
+
+Med OBD-dosan visas en gasrad under ringen, både med och utan rutt: stapeln är gaspedalen (grön inom rekommendationen, orange utanför), det gröna fältet och strecket är det rekommenderade pådraget, och en kort rad säger vad som gäller (`js/gasadvice.js`).
+
+- **Släpp** (0 %): under rullning, när mindre än 150 m återstår till släpp-signalen (ingen idé att gasa upp farten man snart ska rulla av), och när farten är mer än 3 km/h över gränsen eller kurvfarten.
+- **Accelerera lugnt**: mer än 6 km/h under gränsen. Pedalen som håller farten plus det som ger ca 0,9 m/s² (0,1 g), ± 5 %.
+- **Håll farten**: pedalen som håller farten vid gränsen, ± 3 %.
+- Uppför och nedför (ruttens höjddata) läggs till som acceleration. Under 8 km/h ges ingen rekommendation.
+- **Inlärning:** vid jämn fart (under 0,15 m/s² ändring) med gas lär appen sig pedalen per 10 km/h; vid tydlig acceleration hur många procent extra pedal en m/s² kräver. Innan det finns minst fem mätningar används typvärden (ca 12 % vid 50 km/h och 14 % per m/s²), och raden säger *(typvärde)*. Modellen sparas efter varje körning.
+- Sammanfattningen visar andelen av tiden (med OBD och i rörelse) inom rekommendationen; loggen har fältet `gasRec` per mätpunkt och `stats.gasWithinPct`.
 
 ## Utveckling
 
@@ -122,6 +143,8 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/coastlearn.js` | Rullningar under körning: hitta, rensa och väga ihop till A och C |
 | `js/lateral.js` | Gyro → sidokraft, kurvföljning och inlärning |
 | `js/demo.js`, `js/sim.js` | Testbana och simulerade bilar |
+| `js/horizon.js` | Vägen framåt utan rutt ur OSM:s vägnät |
+| `js/gasadvice.js` | Rekommenderat gaspådrag och pedalmodellen |
 
 ## Publicering
 
