@@ -79,7 +79,7 @@ Varje körning och rullprov sparas i telefonen (de 10 senaste). Under Inställni
 - **Spara fil / Dela**: samma sak med alla mätpunkter (en per sekund).
 
 Innehåll: `kind` (`drive` | `calibration`), `dest`, `settings`, `model` (A, C och källa), `route` (längd, andel med känd gräns, fartmål och kurvor), `stats`, `events` och `samples`.
-`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt), `gasRec` (rekommenderat gaspådrag, l/h eller %), `gasLo`/`gasHi` (rekommendationens gränser), `gasKind` (`release`, `hold` eller `accel`), `coolant` (kylvätska, °C), `load` (motorlast, %), `cruise` (1 = farthållaren drar), `fuelL100` (momentan förbrukning, l/100 km), `gasUnit` (`lh` eller `pct` för `gasRec`) och `other` (övriga OBD-värden som lästs sedan förra mätpunkten, `{namn: värde}`; i kompakt logg följer de med till nästa mätpunkt som behålls). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
+`samples.rows` har fälten i `samples.fields`: `t` (s från start), `s` (m längs rutten), `lat`, `lon`, `kmh`, `acc` (GPS-noggrannhet, m), `mode`, `limit` (km/h), `g` (sidokraft), `side` (sidokraft med tecken, positiv = trycker åt höger), `rel` (m till släpp-signal), `alt` (m), `pedal` (%), `rpm`, `obdKmh`, `heading` (GPS-kurs, grader), `lonG` (kraft längs bilen, g, positiv = gas), `coastAdj` (m/s²), `pedalRaw` (givarens värde, %), `gas` (1 = nedtryckt, 0 = släppt), `fuelLh` (l/h), `maf` (g/s), `fuelCut` (1 = bränslet avstängt), `gasRec` (rekommenderat gaspådrag, l/h eller %), `gasLo`/`gasHi` (rekommendationens gränser), `gasKind` (`release`, `hold` eller `accel`), `coolant` (kylvätska, °C), `load` (motorlast, %), `cruise` (1 = farthållaren drar), `fuelL100` (momentan förbrukning, l/100 km), `gasUnit` (`lh` eller `pct` för `gasRec`), `altFused` (höjd ur OBD och GPS, m), `gradeObd` (backen enligt bilen, %) och `other` (övriga OBD-värden som lästs sedan förra mätpunkten, `{namn: värde}`; i kompakt logg följer de med till nästa mätpunkt som behålls). Tomma fält i slutet av en rad utelämnas (saknas = null). Händelsen `obd` vid anslutning har också dosans version, bränsletyp och vilka PID:er bilen redovisar (`pids`, hex).
 Händelser: `coast` (rullning: sträcka, tid, fart, medelinbromsning, avvikelse från modellen, om den användes och varför inte), `release`, `follow`, `reached`, `pause`, `resume`, `offroute`, `reroute` (med färdriktning och antal försök), `rerouteFailed`, `curve` (planerad mot uppmätt sidokraft, radie, svängvinkel gyro/karta), `arrived`, `stopped`; för rullprov `cue`, `done`, `failed` och resultatet i `stats`.
 
 ## Testbana
@@ -128,6 +128,16 @@ Med OBD-dosan visas en gasrad under ringen, både med och utan rutt: stapeln är
 - Accelerationen för inlärningen tas över ca 3 s: bilens fart kommer i hela km/h, och 1 km/h på 1 s är redan 0,28 m/s².
 - Sammanfattningen visar andelen av tiden (med OBD och i rörelse) inom rekommendationen; loggen har fälten `gasRec`, `gasLo`, `gasHi` och `gasUnit` (`lh` eller `pct`) per mätpunkt och `stats.gasWithinPct`.
 
+## Höjdprofil ur bilen (OBD och GPS)
+
+Ruttens höjddata stämmer ofta dåligt: i en verklig körning skilde lutningen 2,7 procentenheter (rms per 150 m) mot både bilen och GPS:en, som i sin tur stämde väl med varandra (korrelation 0,85). Appen bygger därför en egen höjdprofil (`js/elevation.js`).
+
+- **Kalmanfilter längs körd sträcka** med två tillstånd: höjden och felet i OBD-lutningen. OBD-backen (se *Rekommenderat gaspådrag*; släppt gas med mer än 0,8 m/s² inbromsning utöver rullmodellen är broms och räknas inte) ger lutningen på kort sikt. GPS-höjden håller nivån; dess fel hänger ihop över minuter, så den vägs in högst var 200:e meter med minst 8 m osäkerhet (`altitudeAccuracy` om telefonen ger den, annars 1,5 × den horisontella noggrannheten). Under 25 km/h och vid broms finns ingen OBD-lutning och GPS:en tar över.
+- **Efter körningen** jämnas profilen ut bakåt (Rauch–Tung–Striebel), så att varje punkt får både tidigare och senare GPS-höjder. Med konstruerade data blir höjden ca 2,3 m fel mot GPS:ens ca 5 m, lutningen 0,45 % fel per 150 m (OBD ensamt 0,47 %, men med fel i nivån), och felet i OBD-lutningen hittas.
+- **Sparas per kartruta** (ca 22 × 25 m, högst 8 000 rutor ≈ 200 km väg, äldsta tas bort först, `store.elevMap`), sammanvägd över körningar efter osäkerheten. Höjden är i GPS:ens nollplan (ellipsoiden), ca 30 m över ruttens höjddata här.
+- **Loggen** får fälten `altFused` (m) och `gradeObd` (%) per mätpunkt och händelsen `elevation` vid slutet: profilen var 20:e meter (`[m, höjd, osäkerhet, lat, lon]`), antal rutor, skillnaden mot GPS och ruttens höjddata (`gpsGradeRms`, `demOffsetM`, `demGradeRms`) och felet i OBD-lutningen (`biasEnd`), som också visar om bränsle- eller rullmodellen ligger fel.
+- Profilen används **inte ännu** för släpp-punkterna; först jämförs den med verkligheten efter några körningar.
+
 ## Bränsle sparat genom rullning (OBD)
 
 En rullning börjar när gasen släpps över 20 km/h och slutar när gasen trycks ned igen eller bilen stannar (`js/fuelsave.js`). Bränslet som gick åt (med bränsleavstängning ofta 0) jämförs med att hålla farten från början av rullningen över samma sträcka och sedan bromsa ner till samma fart, vilket inte kostar bränsle. Flödet som håller farten kommer från bränslemodellen, med backen ur höjddatan över rullningens sträcka. Blir det negativt (tomgång i nedförsbacke i låg fart) räknas 0. Rullningar kortare än 30 m räknas inte.
@@ -164,6 +174,7 @@ npm start         # http://localhost:8080 (sensorer och GPS kräver HTTPS eller 
 | `js/horizon.js` | Vägen framåt utan rutt ur OSM:s vägnät |
 | `js/gasadvice.js` | Rekommenderat gaspådrag, pedal- och bränslemodellen, backen ur OBD |
 | `js/fuelsave.js` | Bränsle sparat genom rullning |
+| `js/elevation.js` | Höjdprofil ur OBD-backen och GPS-höjden, sparad per kartruta |
 
 ## Publicering
 

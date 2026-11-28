@@ -56,6 +56,12 @@ export const store = {
   /** Inlärd gaspedal för att hålla farten och accelerera (gasadvice.js). */
   get pedalModel() { return get('pedalModel'); },
   set pedalModel(v) { set('pedalModel', v); },
+  // Bränsleflödet som håller farten, för gasrådet i l/h
+  get fuelModel() { return get('fuelModel'); },
+  set fuelModel(v) { set('fuelModel', v); },
+  // Inlärd höjd per kartruta (OBD-backen och GPS-höjden ihop)
+  get elevMap() { return get('elevMap'); },
+  set elevMap(v) { set('elevMap', v); },
   get favorites() { return get('favorites', []); },
   set favorites(v) { set('favorites', v); },
   get onboarded() { return get('onboarded', false); },

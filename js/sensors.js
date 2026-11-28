@@ -65,6 +65,7 @@ function toObs(p) {
     t: p.timestamp / 1000,
     lat: c.latitude, lon: c.longitude,
     alt: c.altitude, accuracy: c.accuracy,
+    altAccuracy: c.altitudeAccuracy != null && Number.isFinite(c.altitudeAccuracy) ? c.altitudeAccuracy : null,
     speed: c.speed != null && Number.isFinite(c.speed) ? c.speed : null,
     heading: c.heading != null && Number.isFinite(c.heading) ? c.heading : null,
   };

@@ -7,6 +7,7 @@ import { fetchOsmAlongRoute, fetchOsmNetwork, cellsAround, assignLimits, buildTa
 import { buildNetwork, buildHorizon, HORIZON } from './horizon.js';
 import { PedalModel, FuelModel, HillEstimate, recommendGas, gasWithin, gasHint } from './gasadvice.js';
 import { CoastSaving } from './fuelsave.js';
+import { ElevationFuser, ElevationMap, ELEV, thinProfile, compareProfile } from './elevation.js';
 import { DEFAULT_MODEL, decel } from './physics.js';
 import { CoastRecorder, analyzeRun, combineRuns, describeModel, CALIB } from './calibration.js';
 import { DriveEngine, releaseMessage, travelHeading } from './drive.js';
@@ -764,6 +765,9 @@ function startDrive() {
   drive.fuelModel = new FuelModel(store.fuelModel, drive.baseModel);
   drive.saving = new CoastSaving();
   drive.hill = new HillEstimate();
+  drive.elev = new ElevationFuser();
+  drive.elevT = null; drive.elevKmh = null; drive.elevGrade = null;
+  drive.altTrail = [];
   drive.gasRec = null; drive.gasIn = 0; drive.gasTotal = 0; drive.gasHist = []; drive.gasLearnT = null; drive.gasLastT = null;
   resetSpeedGraph();
   drive.coastStart = null;
@@ -856,6 +860,7 @@ function saveDriveLog(stats = null) {
     if (seg) handleCoastSegment(seg, drive.lastObs?.t ?? Date.now() / 1000);
   }
   if (stats) finishSaving('slut', drive.lastObs?.t ?? Date.now() / 1000);
+  const elevation = stats ? finishElevation(drive.lastObs?.t ?? Date.now() / 1000) : null;
   const m = drive.meter;
   if (stats && m?.axis && !plan?.demo) store.gyroAxis = { axis: m.axis, r2: m.axisR2, method: 'interval', date: new Date().toISOString() };
   if (stats && drive.pedalModel && !plan?.demo) store.pedalModel = drive.pedalModel.toJSON();
@@ -870,6 +875,7 @@ function saveDriveLog(stats = null) {
     obd: drive.obdUsed ? obdSummary() : null,
     gasWithinPct: drive.gasTotal > 10 ? Math.round(100 * drive.gasIn / drive.gasTotal) : null,
     horizons: plan?.free ? drive.free.builds : undefined,
+    elevation: elevation ?? undefined,
     modelAfter: (() => { const mm = model(); return { A: mm.A, C: mm.C, source: modelSource() }; })(),
   });
   logStore.save(drive.log);
@@ -1189,11 +1195,18 @@ function gasObd(s) {
       if (!s.released) drive.pedalModel.learn(kmh, a, s.pedal, grade);
       const lh = drive.fuelNow?.lh;
       if (s.released === false && !s.fuelCut && lh != null) drive.fuelModel.learn(kmh, a, lh, grade);
+      // Backen som bilen känner den (m/s²). Mer inbromsning än 0,8 m/s² utöver
+      // rullmodellen med släppt gas är broms, inte backe.
+      let hill = null;
       if (kmh >= 20) {
-        if (s.released === false && !s.fuelCut) drive.hill.add(drive.fuelModel.hillWithGas(kmh, a, lh));
-        else if (s.released === true) drive.hill.add(drive.fuelModel.hillCoasting(kmh, a));
+        if (s.released === false && !s.fuelCut) hill = drive.fuelModel.hillWithGas(kmh, a, lh);
+        else if (s.released === true) hill = drive.fuelModel.hillCoasting(kmh, a);
+        if (hill != null && (hill > 0.8 || hill < -1.5)) hill = null;
+        drive.hill.add(hill);
       } else drive.hill.reset();
-    }
+      drive.elevGrade = kmh >= 25 && hill != null ? hill / 9.81 : null;
+    } else drive.elevGrade = null;
+    elevStep(s);
     if (s.kmh === 0 && s.pedalReleased !== false && !s.fuelCut && drive.fuelNow?.lh != null) drive.fuelModel.learnIdle(drive.fuelNow.lh);
   }
   const rec = drive.gasRec;
@@ -1204,6 +1217,69 @@ function gasObd(s) {
     drive.gasTotal += dt;
     if (within) drive.gasIn += dt;
   }
+}
+
+// ---------- Höjdprofil ur OBD och GPS ----------
+/** Ett steg i höjdfiltret per OBD-sekund: körd sträcka ur bilens fart, OBD-backen och GPS-höjden. */
+function elevStep(s) {
+  const f = drive.elev;
+  if (!f || plan?.demo || s.kmh == null) return;
+  const dt = drive.elevT != null ? s.t - drive.elevT : 0;
+  const prevKmh = drive.elevKmh ?? s.kmh;
+  drive.elevT = s.t; drive.elevKmh = s.kmh;
+  if (dt < 0 || dt > 10) return;
+  const o = drive.lastObs;
+  const fresh = !!o && drive.obsWall != null && Date.now() / 1000 - drive.obsWall < 3 && o.alt != null;
+  f.step({
+    ds: (s.kmh + prevKmh) / 2 / 3.6 * dt,
+    grade: drive.elevGrade,
+    alt: fresh ? o.alt : null,
+    altSd: fresh ? (o.altAccuracy ?? (o.accuracy != null ? o.accuracy * ELEV.altSdPerAcc : null)) : null,
+    lat: o?.lat ?? null, lon: o?.lon ?? null,
+  });
+}
+
+/** Körningen slutar: profilen jämnas ut, sparas per kartruta och skrivs i loggen. */
+function finishElevation(t) {
+  const f = drive.elev;
+  if (!f || plan?.demo || f.dist < 300 || !f.steps.some(x => x.grade != null)) return null;
+  drive.elev = null; // en gång per körning
+  const thin = thinProfile(f.smooth());
+  const map = new ElevationMap(store.elevMap);
+  const knownBefore = thin.filter(p => p.lat != null && map.at(p.lat, p.lon)).length;
+  const cells = map.add(thin);
+  store.elevMap = map.toJSON();
+  // Jämförelse med GPS-höjden och ruttens höjddata (som har ett annat nollplan)
+  const gps = compareProfile(thin, p => nearestObs(p)?.alt ?? null);
+  const r = plan?.route;
+  const dem = r?.hasEle ? compareProfile(thin, p => {
+    const m = p.lat != null ? matchToRoute(r, p.lat, p.lon) : null;
+    return m ? elevationAt(r, m.s) : null;
+  }) : null;
+  const cur = f.current();
+  const res = {
+    distM: f.dist, points: thin.length, cells, knownBefore, mapCells: map.size(),
+    biasEnd: cur?.bias ?? null, gpsGradeRms: gps?.gradeRms ?? null,
+    demOffsetM: dem?.offsetM ?? null, demGradeRms: dem?.gradeRms ?? null,
+  };
+  drive.log?.event(t, 'elevation', {
+    ...res,
+    // Profilen: [m från start, höjd (m, GPS:ens nollplan), osäkerhet (m), lat, lon]
+    profile: thin.map(p => [Math.round(p.d), Math.round(p.h * 10) / 10, Math.round(p.sd * 10) / 10,
+      p.lat != null ? Math.round(p.lat * 1e6) / 1e6 : null, p.lon != null ? Math.round(p.lon * 1e6) / 1e6 : null]),
+  });
+  return res;
+}
+
+/** Närmaste GPS-punkt i körningens spår (för jämförelsen i loggen). */
+function nearestObs(p) {
+  if (p.lat == null) return null;
+  let best = null, bd = Infinity;
+  for (const o of drive.altTrail || []) {
+    const d = (o.lat - p.lat) ** 2 + ((o.lon - p.lon) * 0.45) ** 2;
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
 }
 
 // ---------- Bränsle sparat genom rullning ----------
@@ -1465,6 +1541,7 @@ function onDriveObs(obs) {
   const prevObs = drive.lastObs;
   const prevS = drive.engine.s;
   drive.lastObs = obs;
+  if (obs.alt != null && drive.altTrail && drive.altTrail.length < 20000) drive.altTrail.push({ lat: obs.lat, lon: obs.lon, alt: obs.alt });
   drive.obsWall = Date.now() / 1000;
   if (!plan.demo) drive.raw?.addGps(obs);
   if (plan.free) updateFree(obs, prevObs);
@@ -1536,6 +1613,8 @@ function logDrive(view, obs, events) {
     mode: view.mode, limit: plan.limits[i], g: m?.g, side: m?.side, lonG: m?.lonG, rel: view.distToRelease, alt: obs.alt,
     coastAdj: drive.liveAdj ? Math.round(drive.liveAdj.dA * 1000) / 1000 : undefined,
     heading: obs.heading,
+    altFused: drive.elev?.current()?.h,
+    gradeObd: drive.elevGrade != null ? drive.elevGrade * 100 : undefined,
     ...obdFields(),
     ...gasFields(),
     other: drive.obdOther,
